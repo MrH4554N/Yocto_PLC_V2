@@ -1,0 +1,9 @@
+{
+  "_comment": "Bench conveyor rig limits (2026-07-28), derived from system_parameters.yaml. u bounds span the rig's full speed range; du is the per-tick rate limit at dt=1 s; I_max/T_max are the SOFT constraint levels (slack-penalised) and sit below the hard safety-envelope limits max_safe_current_a=0.30 A / max_safe_temp_c=85 degC.",
+  "u_min": 0.0,
+  "u_max": 660.0,
+  "du_min": -50.0,
+  "du_max": 50.0,
+  "I_max": 0.25,
+  "T_max": 70.0
+}

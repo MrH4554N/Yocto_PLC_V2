@@ -1,0 +1,4 @@
+# Template settings
+# Mặc định dùng cấu hình của meta-plc (Raspberry Pi 4 + HMI + trợ lý AI).
+# Muốn quay lại cấu hình gốc của poky: TEMPLATECONF=meta-poky/conf/templates/default
+TEMPLATECONF=${TEMPLATECONF:-meta-plc/conf/templates/plc}

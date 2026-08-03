@@ -1,0 +1,22 @@
+[Unit]
+Description=Industrial HMI Application (PyQt5)
+After=weston.service
+Requires=weston.service
+
+[Service]
+Type=simple
+# ĐỔI TỪ root SANG weston
+User=weston
+Group=weston
+# Cấp quyền cho user weston đọc cổng Serial và I2C
+SupplementaryGroups=dialout i2c tty input video
+
+Environment="XDG_RUNTIME_DIR=/run/user/1000"
+Environment="WAYLAND_DISPLAY=wayland-1"
+Environment="QT_QPA_PLATFORM=wayland"
+ExecStart=/usr/bin/python3 /usr/lib/hmi-app/hmi_fx_ai.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

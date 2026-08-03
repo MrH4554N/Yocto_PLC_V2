@@ -1,0 +1,14 @@
+# Phân vùng 1: Boot (FAT32)
+part /boot --source bootimg-partition --ondisk mmcblk0 --fstype=vfat --label boot --active --align 4096 --size 100
+
+# Phân vùng 2: Hệ điều hành phân khu A
+part / --source rootfs --ondisk mmcblk0 --fstype=ext4 --label rootfs_a --align 4096 --size 1536
+
+# Phân vùng 3: Hệ điều hành phân khu B (Dự phòng cho OTA)
+part --source rootfs --ondisk mmcblk0 --fstype=ext4 --label rootfs_b --align 4096 --size 1536
+
+# Phân vùng 5: Dữ liệu cấu hình / Database (Sẽ được map vào p5)
+part /data --ondisk mmcblk0 --fstype=ext4 --label data --align 4096 --size 512
+
+# Phân vùng 6: Home của user (Sẽ được map vào p6)
+part /home --ondisk mmcblk0 --fstype=ext4 --label home --align 4096 --size 512

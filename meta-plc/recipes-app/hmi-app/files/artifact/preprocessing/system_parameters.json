@@ -1,0 +1,42 @@
+{
+  "motor": {
+    "Kt": 0.1736,
+    "no_load_current_a": 0.02,
+    "rated_current_a": 0.25,
+    "rated_torque_nm": 0.04,
+    "rated_speed_rpm": 660.0,
+    "gear_ratio": 1.0
+  },
+  "safety": {
+    "max_safe_current_a": 0.3,
+    "max_safe_temp_c": 85.0,
+    "max_pid_output_percent": 100.0
+  },
+  "torque_estimation": {
+    "has_drive_torque": false,
+    "has_torque_percent": false,
+    "has_iq_current": false
+  },
+  "sampling": {
+    "rate_hz": 1,
+    "resample_period_ms": 1000
+  },
+  "simulation": {
+    "dt": 1.0,
+    "motor_time_constant_s": 2.0,
+    "supply_voltage_v": 12.0,
+    "source_resistance_ohm": 2.5,
+    "winding_resistance_ohm": 20.0,
+    "ambient_temp_c": 28.0,
+    "thermal_resistance_c_per_w": 15.0,
+    "thermal_mass_j_per_c": 30.0,
+    "current_viscous_coeff_a": 0.1,
+    "current_load_coeff_a": 0.12,
+    "current_accel_coeff_a": 0.06,
+    "load_factor_nominal": 0.5,
+    "load_factor_min": 0.15,
+    "load_factor_max": 0.85,
+    "load_factor_walk_std": 0.01,
+    "speed_load_droop_rpm": 40.0
+  }
+}

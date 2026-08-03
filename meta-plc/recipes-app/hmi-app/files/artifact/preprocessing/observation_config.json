@@ -1,0 +1,19 @@
+{
+  "features": [
+    "setpoint_rpm",
+    "speed_rpm",
+    "tracking_error_rpm",
+    "current_a",
+    "temp_c",
+    "voltage_v",
+    "load_torque_est_nm",
+    "power_w",
+    "mech_power_w",
+    "efficiency_est",
+    "accel_rpm_s",
+    "tracking_error_integral_rpm_s"
+  ],
+  "window_size": 50,
+  "stride": 1,
+  "scaler": "standard"
+}

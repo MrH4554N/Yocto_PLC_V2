@@ -1,0 +1,5 @@
+{
+  "_comment": "N=20 steps at dt=1.0 s gives a 20 s prediction horizon, i.e. 10 mechanical time constants (tau=2 s). dt MUST equal plant_model.npz dt or MPCController raises at load time.",
+  "N": 20,
+  "dt": 1.0
+}

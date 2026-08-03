@@ -1,0 +1,14 @@
+# Bỏ qua các file tạm của hệ điều hành và editor
+*~
+*.swp
+.DS_Store
+__pycache__/
+*.pyc
+
+# Bỏ qua các file model/scaler thật lỡ sau này bạn copy vào (GitHub giới hạn file > 100MB)
+*.onnx
+
+# Trừ model trong artifact IHCS: 829 KB, thừa sức đẩy thẳng lên GitHub và BẮT
+# BUỘC phải có. Thiếu file này thì ArtifactLoader không verify được checksum,
+# trợ lý AI tắt hẳn trên máy — mà build vẫn xanh nên rất khó lần ra.
+!recipes-app/hmi-app/files/artifact/**/*.onnx

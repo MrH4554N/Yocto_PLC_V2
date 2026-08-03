@@ -1,0 +1,12 @@
+# 1. Bỏ qua các thư mục nặng của Yocto
+build/
+downloads/
+sstate-cache/
+tmp/
+workspace/
+
+# 2. Bỏ qua dữ liệu AI và rác của Python
+*.csv
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/

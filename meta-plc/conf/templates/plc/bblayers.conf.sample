@@ -1,0 +1,25 @@
+# POKY_BBLAYERS_CONF_VERSION is increased each time build/conf/bblayers.conf
+# changes incompatibly
+POKY_BBLAYERS_CONF_VERSION = "2"
+
+BBPATH = "${TOPDIR}"
+BBFILES ?= ""
+
+# Toàn bộ layer nằm trong chính checkout này — không trỏ ra ngoài repo, nên
+# clone về máy khác là build được ngay. Placeholder gốc repo bên dưới được
+# oe-setup-builddir thay bằng đường dẫn tuyệt đối lúc tạo build dir.
+BBLAYERS ?= " \
+  ##OEROOT##/meta \
+  ##OEROOT##/meta-poky \
+  ##OEROOT##/meta-yocto-bsp \
+  ##OEROOT##/meta-openembedded/meta-oe \
+  ##OEROOT##/meta-openembedded/meta-python \
+  ##OEROOT##/meta-openembedded/meta-networking \
+  ##OEROOT##/meta-openembedded/meta-multimedia \
+  ##OEROOT##/meta-raspberrypi \
+  ##OEROOT##/meta-qt5 \
+  ##OEROOT##/meta-rauc \
+  ##OEROOT##/meta-rauc-community/meta-rauc-raspberrypi \
+  ##OEROOT##/meta-custom \
+  ##OEROOT##/meta-plc \
+  "

@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Giao tiếp PLC Mitsubishi FX qua chuẩn Computer Link (ASCII)."""
+
+import serial
+import threading
+
+from config import (ADDR_D120_SPEED, ADDR_D8116_CMD, PLC_PORT,
+                    RAW_GAIN, RAW_MAX, RAW_MIN, RAW_OFFSET)
+
+
+def speed_to_raw(target_speed):
+    """Quy đổi tốc độ (rpm) -> giá trị raw ghi vào D8116."""
+    if target_speed == 0:
+        return 0
+    raw = int(RAW_GAIN * target_speed + RAW_OFFSET)
+    return max(RAW_MIN, min(RAW_MAX, raw))
+
+
+def raw_to_speed(raw):
+    """Nghịch đảo của speed_to_raw — đọc lại setpoint."""
+    if raw is None or raw <= 0:
+        return 0.0
+    return max(0.0, (float(raw) - RAW_OFFSET) / RAW_GAIN)
+
+
+class PLCDriver:
+    """Driver đọc/ghi PLC dùng Mitsubishi Computer Link."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.connected = False
+        self.ser = None
+
+    def connect(self):
+        with self._lock:
+            try:
+                if self.ser is None or not self.ser.is_open:
+                    self.ser = serial.Serial(
+                        port=PLC_PORT, 
+                        baudrate=38400, 
+                        bytesize=serial.SEVENBITS,
+                        parity=serial.PARITY_EVEN, 
+                        stopbits=serial.STOPBITS_ONE, 
+                        timeout=0.5
+                    )
+                self.connected = True
+            except Exception as e:
+                self.connected = False
+                print(f"[PLC] Lỗi mở cổng Serial: {e}")
+        return self.connected
+
+    def _get_fx_address(self, reg_index):
+        return 0x1000 + (reg_index * 2)
+
+    def _read_register(self, reg_index):
+        """Hàm đọc thanh ghi theo chuẩn Computer Link từ file demo."""
+        if not self.ser or not self.ser.is_open:
+            raise IOError("Serial port not open")
+            
+        address_hex = f"{self._get_fx_address(reg_index):04X}"
+        payload = f"0{address_hex}02\x03"
+        checksum = sum(payload.encode('ascii')) & 0xFF
+        cmd = f"\x02{payload}{checksum:02X}"
+
+        self.ser.reset_input_buffer()
+        self.ser.write(cmd.encode('ascii'))
+        self.ser.flush()
+
+        response_bytes = self.ser.read(8)
+        if len(response_bytes) == 8 and response_bytes[0] == 0x02:
+            response = response_bytes.decode('ascii', errors='ignore')
+            data = response[1:5]
+            val = int(data[2:4] + data[0:2], 16)
+            return val - 65536 if val > 32767 else val
+            
+        raise IOError("Invalid response from PLC (Computer Link)")
+
+    def _write_register(self, reg_index, value):
+        """Hàm ghi thanh ghi theo chuẩn Computer Link từ file demo."""
+        if not self.ser or not self.ser.is_open:
+            return False
+            
+        if not (-32768 <= value <= 65535): return False
+        if value < 0: value = (1 << 16) + value
+        
+        address_hex = f"{self._get_fx_address(reg_index):04X}"
+        hex_val = f"{value:04X}"
+        swapped = hex_val[2:4] + hex_val[0:2]
+        payload = f"1{address_hex}02{swapped}\x03"
+        checksum = sum(payload.encode('ascii')) & 0xFF
+        cmd = f"\x02{payload}{checksum:02X}"
+
+        self.ser.reset_input_buffer()
+        self.ser.write(cmd.encode('ascii'))
+        self.ser.flush()
+        
+        res = self.ser.read(1)
+        return res == b'\x06'
+
+    def read_speed(self):
+        with self._lock:
+            val = self._read_register(ADDR_D120_SPEED)
+        self.connected = True
+        return val
+
+    def read_setpoint(self):
+        try:
+            with self._lock:
+                val = self._read_register(ADDR_D8116_CMD)
+            return raw_to_speed(val)
+        except Exception:
+            return None
+
+    def write_raw(self, raw_command):
+        with self._lock:
+            return self._write_register(ADDR_D8116_CMD, raw_command)
+
+    def close(self):
+        try:
+            with self._lock:
+                if self.ser and self.ser.is_open:
+                    self.ser.close()
+                self.connected = False
+        except Exception:
+            pass

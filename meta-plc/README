@@ -1,0 +1,92 @@
+meta-plc — Băng chuyền PLC Mitsubishi FX + HMI có trợ lý AI
+===========================================================
+
+Layer riêng của đồ án, dựng image Raspberry Pi 4 (64-bit) chạy Weston kiosk với
+ứng dụng HMI PyQt5 và trợ lý AI advisory-only.
+
+
+I. Build
+========
+
+Toàn bộ layer nằm trong chính checkout này, không cần clone thêm gì:
+
+    cd <gốc repo>
+    source oe-init-build-env build
+    bitbake core-image-base
+
+Lệnh source tự sinh build/conf/{local.conf,bblayers.conf} từ template
+meta-plc/conf/templates/plc (chỉ định trong .templateconf ở gốc repo).
+
+Ảnh ra ở: build/tmp/deploy/images/raspberrypi4-64/*.wic.bz2
+
+Ghi thẻ nhớ:
+
+    bzcat *.wic.bz2 | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+
+Kiểm từng phần trước khi build cả image (nhanh hơn nhiều):
+
+    bitbake hmi-app
+    bitbake python3-scipy python3-osqp python3-onnxruntime
+
+
+II. Ứng dụng HMI
+================
+
+recipes-app/hmi-app/ — cài vào /usr/lib/hmi-app, chạy bằng service hmi-app.service.
+
+    hmi_fx_ai.py    điểm khởi động
+    config.py       cấu hình phần cứng, đường dẫn, chu kỳ (đọc được từ biến môi trường)
+    core/           thu thập dữ liệu: Modbus PLC, cảm biến dòng/áp I2C, MQTT, luồng nền
+    services/       trợ lý AI: dựng feature, chạy suy luận, định dạng kết quả
+    ui/             giao diện: theme, widget, 5 trang, cửa sổ chính
+    ihcs/           runtime AI lấy nguyên từ IHCS-Project, không sửa tại chỗ
+    artifact/       model đã train + cấu hình, cài vào /usr/share/hmi-app/artifact
+
+Chạy tay để xem log:
+
+    /usr/bin/python3 /usr/lib/hmi-app/hmi_fx_ai.py
+
+Trỏ sang artifact khác mà không cần build lại:
+
+    IHCS_ARTIFACT_DIR=/home/root/artifact-moi /usr/bin/python3 /usr/lib/hmi-app/hmi_fx_ai.py
+
+
+III. Trợ lý AI
+==============
+
+Advisory-only: AI chỉ đề xuất setpoint, người vận hành bấm nút mới ghi xuống
+PLC. Trong code không có đường nào để AI tự ghi.
+
+Hai tầng:
+  • LSTM (ONNX)  — điểm bất thường từ 12 feature; vượt ngưỡng nghiêm trọng thì
+                   chặn toàn bộ đề xuất.
+  • MPC (osqp)   — giải QP mỗi chu kỳ để ra setpoint bám tốc độ mục tiêu mà
+                   vẫn giữ dòng và nhiệt trong giới hạn.
+
+HMI chỉ đo được tốc độ, điện áp, dòng điện; 9 feature còn lại do
+services/ihcs_bridge.py suy ra bằng đúng công thức lúc train
+(Phase_1_PC_Training/preprocessing/derive_signals.py bên IHCS-Project).
+Nhiệt độ là ước lượng I^2R vì phần cứng không có cảm biến nhiệt.
+
+Thiếu python3-scipy hoặc python3-osqp thì app KHÔNG chết: tự hạ cấp xuống chế
+độ chỉ cảnh báo bất thường, trang Hệ thống ghi rõ đang chạy chế độ nào.
+
+Đổi artifact: chép thư mục artifact mới đè lên recipes-app/hmi-app/files/artifact
+rồi build lại. Nếu runtime IHCS đổi API thì chép lại 4 file trong
+recipes-app/hmi-app/files/ihcs/runtime/.
+
+
+IV. Thư viện Python dựng sẵn
+============================
+
+recipes-python/ chứa các wheel manylinux aarch64 tải thẳng từ PyPI thay vì
+build từ nguồn (scipy/onnxruntime build nguồn rất nặng):
+
+    python3-onnxruntime  1.27.0
+    python3-scipy        1.16.2
+    python3-osqp         1.1.1
+    python3-pi-ina219, python3-pi-ina226, python3-pyqtgraph
+
+QUAN TRỌNG: wheel phải là cp313-cp313, KHÔNG phải cp313-cp313t. poky walnascar
+build CPython 3.13 bản thường; bản cp313t là ABI free-threading, cài vào thì
+import chết. Khi nâng phiên bản nhớ kiểm lại đúng biến thể này.

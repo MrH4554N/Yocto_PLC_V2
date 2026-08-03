@@ -1,0 +1,12 @@
+{
+  "_comment": "Runtime clipping/blocking envelope applied AFTER the MPC solution as defense-in-depth (2026-07-28). Bounds match the rig's rated speed of 660 RPM and the 50 RPM/tick rate limit.",
+  "mode": "advisory_only",
+  "action_bounds": {
+    "min_delta_setpoint_rpm": -50.0,
+    "max_delta_setpoint_rpm": 50.0
+  },
+  "setpoint_bounds": {
+    "min_setpoint_rpm": 0.0,
+    "max_setpoint_rpm": 660.0
+  }
+}

@@ -1,0 +1,15 @@
+### Băng chuyền PLC + HMI AI — Raspberry Pi 4 (64-bit) ###
+
+Mục tiêu build:
+    bitbake core-image-base
+
+Ảnh nằm ở: tmp/deploy/images/raspberrypi4-64/*.wic.bz2
+
+Kiểm nhanh trước khi build lâu:
+    bitbake -e hmi-app | grep ^SRC_URI=        # recipe có thấy đủ file không
+    bitbake hmi-app                            # build riêng app (~vài phút)
+    bitbake python3-scipy python3-osqp python3-onnxruntime
+
+Trợ lý AI cần đủ: python3-onnxruntime + python3-scipy + python3-osqp.
+Thiếu scipy/osqp thì app vẫn chạy nhưng chỉ cảnh báo bất thường,
+không đề xuất setpoint (xem trang Hệ thống trên HMI để biết đang ở chế độ nào).

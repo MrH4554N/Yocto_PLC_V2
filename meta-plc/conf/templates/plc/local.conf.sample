@@ -1,0 +1,114 @@
+# Cấu hình build cho băng chuyền PLC + HMI AI (Raspberry Pi 4 64-bit).
+#
+# Sinh ra từ template meta-plc/conf/templates/plc. Sửa file này chỉ ảnh hưởng
+# build dir hiện tại; muốn đổi cho mọi build sau thì sửa template.
+
+MACHINE = "raspberrypi4-64"
+DISTRO ?= "poky"
+PACKAGE_CLASSES ?= "package_rpm"
+USER_CLASSES ?= "buildstats"
+PATCHRESOLVE = "noop"
+CONF_VERSION = "2"
+
+# ==========================================================================
+# BỘ NHỚ / TỐC ĐỘ BUILD
+# ==========================================================================
+BB_NUMBER_THREADS = "8"
+PARALLEL_MAKE     = "-j 8"
+# Vài recipe ngốn RAM, giới hạn riêng để không bị OOM khi máy 16 GB
+PARALLEL_MAKE:pn-openssl-native = "-j 4"
+PARALLEL_MAKE:pn-openssl        = "-j 4"
+PARALLEL_MAKE:pn-git            = "-j 1"
+PARALLEL_MAKE:pn-ghostscript    = "-j 1"
+PARALLEL_MAKE:pn-python3-numpy-native = "-j 2"
+PARALLEL_MAKE:pn-opencv         = "-j 2"
+PARALLEL_MAKE:pn-python3-pandas = "-j 2"
+PARALLEL_MAKE:pn-boost          = "-j 2"
+
+# Dùng chung cache với build khác cho đỡ tải lại và đỡ build lại. Trỏ vào ổ
+# còn nhiều chỗ trống nhất.
+#DL_DIR ?= "/đường/dẫn/downloads"
+#SSTATE_DIR ?= "/đường/dẫn/sstate-cache"
+
+# Xoá thư mục work của từng recipe ngay sau khi build xong. Đổi lại: muốn xem
+# lại source đã vá của một recipe thì phải build lại recipe đó.
+#INHERIT += "rm_work"
+
+# ==========================================================================
+# HỆ THỐNG
+# ==========================================================================
+DISTRO_FEATURES:append = " systemd usrmerge wayland opengl pam wifi rauc"
+VIRTUAL-RUNTIME_init_manager = "systemd"
+VIRTUAL-RUNTIME_initscripts  = ""
+DEFAULT_TIMEZONE = "Asia/Ho_Chi_Minh"
+IMAGE_LINGUAS = ""
+
+IMAGE_FEATURES:remove = "doc-pkgs debug-tweaks dbg-pkgs dev-pkgs"
+EXTRA_IMAGE_FEATURES += "ssh-server-openssh"
+# Máy đồ án: cho đăng nhập root không mật khẩu. BỎ DÒNG NÀY khi đưa ra thực tế.
+EXTRA_IMAGE_FEATURES += "allow-empty-password empty-root-password allow-root-login"
+
+# ==========================================================================
+# PHẦN CỨNG RASPBERRY PI
+# ==========================================================================
+ENABLE_UART     = "1"
+ENABLE_SPI_BUS  = "1"
+ENABLE_I2C      = "1"
+KERNEL_MODULE_AUTOLOAD:rpi += "i2c-dev i2c-bcm2835"
+VIDEO_CAMERA = "1"
+
+# ==========================================================================
+# OTA A/B BẰNG RAUC (u-boot)
+# ==========================================================================
+RPI_USE_U_BOOT = "1"
+IMAGE_FSTYPES += "wic.bz2 wic.bmap tar.bz2 ext4"
+WKS_FILE = "plc-hmi-rauc.wks"
+IMAGE_BOOT_FILES:append = " boot.scr"
+# Khoá ký dùng cho phát triển, nằm trong repo. Sản phẩm thật phải thay khoá.
+RAUC_KEY_FILE  = "${COREBASE}/meta-plc/recipes-core/rauc/files/development-1.key"
+RAUC_CERT_FILE = "${COREBASE}/meta-plc/recipes-core/rauc/files/development-1.cert"
+
+# ==========================================================================
+# GÓI ĐƯA VÀO IMAGE
+# ==========================================================================
+IMAGE_INSTALL:append = " \
+    rauc u-boot-fw-utils libubootenv \
+    weston weston-init weston-examples \
+    connman connman-client iw \
+    libcamera-apps v4l-utils \
+    kernel-module-ch341 kernel-module-ftdi-sio kernel-module-pl2303 \
+    kernel-module-cp210x kernel-module-usbserial kernel-module-i2c-dev \
+    sudo coreutils util-linux nano vim bash less htop curl git openssh i2c-tools \
+    libgpiod libgpiod-tools \
+"
+
+# --- Python nền ---
+IMAGE_INSTALL:append = " \
+    python3 python3-pip python3-venv python3-core python3-sqlite3 \
+    python3-numpy python3-pandas python3-matplotlib \
+    python3-pyserial python3-smbus python3-smbus2 python3-gpiod \
+    python3-paho-mqtt python3-opencv \
+"
+
+# --- HMI + trợ lý AI ---
+# hmi-app tự kéo theo pyqt5, pyqtgraph, pymodbus, pi-ina219, onnxruntime,
+# scipy và osqp qua RDEPENDS; liệt kê ở đây cho dễ thấy và dễ tạm bỏ khi cần.
+IMAGE_INSTALL:append = " \
+    hmi-app \
+    python3-pyqt5 qtwayland \
+    python3-pyqtgraph \
+    python3-pi-ina219 \
+    python3-onnxruntime \
+    python3-scipy \
+    python3-osqp \
+"
+
+# ==========================================================================
+# QA
+# ==========================================================================
+# Nhiều recipe nội bộ để LICENSE = "CLOSED" nên hạ license-checksum xuống cảnh báo
+ERROR_QA:remove = "license-checksum"
+WARN_QA:append = " license-checksum"
+LICENSE_FLAGS_ACCEPTED += "synaptics-killswitch"
+
+PACKAGECONFIG:append:pn-qemu-system-native = " sdl"
