@@ -9,6 +9,7 @@ mà raw 3854 thực tế chạy 971 rpm).
 """
 
 import serial
+import time
 import threading
 
 from command_map import CommandMap, load_calibration
@@ -142,9 +143,21 @@ class PLCDriver:
         raw = self.read_command_register()
         return None if raw is None else raw_to_speed(raw)
 
-    def write_raw(self, raw_command):
+    def write_raw(self, raw_command, retries=2):
+        """Ghi lệnh xuống D8116, thử lại vài lần nếu PLC không trả ACK.
+
+        Lệnh ghi là thao tác DUY NHẤT do người vận hành bấm và chờ kết quả —
+        trượt một khung truyền mà báo đỏ ngay thì họ tưởng hỏng phần cứng.
+        Vòng đọc nền chạy liên tục nên thỉnh thoảng một khung ghi rơi đúng lúc
+        PLC còn đang bận trả lời khung đọc trước; thử lại là ăn ngay.
+        """
         with self._lock:
-            return self._write_register(self.addr_cmd, raw_command)
+            for attempt in range(retries + 1):
+                if self._write_register(self.addr_cmd, raw_command):
+                    return True
+                if attempt < retries:
+                    time.sleep(0.08)      # cho PLC kịp dọn khung dở
+            return False
 
     def close(self):
         try:

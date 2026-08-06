@@ -31,6 +31,10 @@ from services.ai_service import AIService
 
 _MB = 1024 * 1024
 
+# Đọc lại thanh ghi lệnh mỗi bao nhiêu chu kỳ (10 x 0,5 s = 5 s). Xem chú
+# thích trong vòng lặp: giữ lưu lượng bus đúng bằng bản gốc.
+CMD_READ_EVERY_N = 10
+
 
 class DataWorker(QThread):
     """Thu thập dữ liệu + chạy AI, phát kết quả ra giao diện bằng signal."""
@@ -118,6 +122,7 @@ class DataWorker(QThread):
         self.link_update.emit(dict(self.links))
 
         net_counter = NET_EVERY_N          # đọc ngay ở vòng đầu
+        cmd_counter = 0
 
         while self.is_running:
             speed, voltage, current, power = 0, 0.0, 0.0, 0.0
@@ -151,14 +156,22 @@ class DataWorker(QThread):
                     self.link_update.emit(dict(self.links))
                     self.status_update.emit(f"Lỗi PLC: {e}")
 
-            # Đọc lại thanh ghi lệnh mỗi chu kỳ: người khác có thể đổi lệnh
-            # ngoài HMI này, và AI phải so tốc độ đo được với lệnh THẬT sự đang
-            # có. Đọc lỗi thì giữ giá trị cũ chứ không xoá về None — một lần
-            # trượt khung truyền không phải là "mất hiệu chuẩn".
-            latest_cmd = self.plc.read_command_register()
-            if latest_cmd is not None and latest_cmd != self.cmd_register:
-                self.cmd_register = latest_cmd
-                self.command_update.emit(latest_cmd)
+            # Đọc lại thanh ghi lệnh để bắt trường hợp người khác đổi lệnh
+            # ngoài HMI này. KHÔNG đọc mỗi chu kỳ: bản gốc chỉ đọc D8116 một
+            # lần lúc khởi động, đọc mỗi 0,5 giây làm gấp đôi số giao dịch trên
+            # bus Computer Link — link nối tiếp 7E1 chỉ có một luồng, nhồi thêm
+            # một giao dịch vào giữa là lệnh ghi của người vận hành phải chen
+            # chân và dễ mất ACK. 5 giây một lần là quá đủ để phát hiện ai đó
+            # đổi lệnh, mà lưu lượng thì về đúng mức bản gốc.
+            # Đọc lỗi thì giữ giá trị cũ chứ không xoá về None — một lần trượt
+            # khung truyền không phải là "mất hiệu chuẩn".
+            cmd_counter += 1
+            if cmd_counter >= CMD_READ_EVERY_N:
+                cmd_counter = 0
+                latest_cmd = self.plc.read_command_register()
+                if latest_cmd is not None and latest_cmd != self.cmd_register:
+                    self.cmd_register = latest_cmd
+                    self.command_update.emit(latest_cmd)
 
             # --- ĐỌC CẢM BIẾN DÒNG/ÁP ---
             if self.ina.available:
