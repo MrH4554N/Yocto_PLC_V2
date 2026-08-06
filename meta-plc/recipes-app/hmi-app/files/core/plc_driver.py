@@ -1,27 +1,36 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Giao tiếp PLC Mitsubishi FX qua chuẩn Computer Link (ASCII)."""
+"""Giao tiếp PLC Mitsubishi FX qua chuẩn Computer Link (ASCII).
+
+Phép quy đổi tốc độ <-> thanh ghi lệnh dùng bảng hiệu chuẩn đo được trong
+artifact (xem command_map.py): thanh ghi này điều khiển ĐIỆN ÁP và bão hoà ở
+rail nguồn, nên hệ số tuyến tính cũ ghi lệch tới ~1,6 lần (600 rpm -> raw 3854,
+mà raw 3854 thực tế chạy 971 rpm).
+"""
 
 import serial
 import threading
 
-from config import (ADDR_D120_SPEED, ADDR_D8116_CMD, PLC_PORT,
-                    RAW_GAIN, RAW_MAX, RAW_MIN, RAW_OFFSET)
+from command_map import CommandMap, load_calibration
+from config import (ADDR_D120_SPEED, ADDR_D8116_CMD, ARTIFACT_DIR, PLC_PORT,
+                    RAW_MAX, RAW_MIN)
+
+# Một bảng tra dùng chung cho cả app: đường ghi PLC và đường dựng feature cho
+# AI phải hiểu con số trong D8116 giống hệt nhau.
+COMMAND_MAP = CommandMap(load_calibration(ARTIFACT_DIR),
+                         raw_min=RAW_MIN, raw_max=RAW_MAX)
 
 
 def speed_to_raw(target_speed):
     """Quy đổi tốc độ (rpm) -> giá trị raw ghi vào D8116."""
-    if target_speed == 0:
-        return 0
-    raw = int(RAW_GAIN * target_speed + RAW_OFFSET)
-    return max(RAW_MIN, min(RAW_MAX, raw))
+    return COMMAND_MAP.speed_to_raw(target_speed)
 
 
 def raw_to_speed(raw):
     """Nghịch đảo của speed_to_raw — đọc lại setpoint."""
-    if raw is None or raw <= 0:
+    if raw is None:
         return 0.0
-    return max(0.0, (float(raw) - RAW_OFFSET) / RAW_GAIN)
+    return COMMAND_MAP.raw_to_speed(raw)
 
 
 class PLCDriver:
@@ -104,13 +113,17 @@ class PLCDriver:
         self.connected = True
         return val
 
-    def read_setpoint(self):
+    def read_command_register(self):
+        """Giá trị THÔ của D8116. AI cần con số thô để tự tra bảng hiệu chuẩn."""
         try:
             with self._lock:
-                val = self._read_register(ADDR_D8116_CMD)
-            return raw_to_speed(val)
+                return self._read_register(ADDR_D8116_CMD)
         except Exception:
             return None
+
+    def read_setpoint(self):
+        raw = self.read_command_register()
+        return None if raw is None else raw_to_speed(raw)
 
     def write_raw(self, raw_command):
         with self._lock:

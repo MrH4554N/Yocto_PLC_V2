@@ -11,7 +11,8 @@ from pathlib import Path
 
 class SafetyEnvelope:
     """
-    Applies the safety envelope to PPO recommendations.
+    Applies the safety envelope to MPC recommendations (in RPM: the MPC solves
+    in volts, the caller converts before getting here).
 
     States:
       pass    — recommendation is within bounds; output unchanged
@@ -21,7 +22,7 @@ class SafetyEnvelope:
 
     def __init__(self, safety_envelope_config: dict, thresholds: dict | None = None):
         """
-        safety_envelope_config: from ppo_setpoint/safety_envelope.json
+        safety_envelope_config: from mpc/safety_envelope.json
         thresholds: from lstm_anomaly/thresholds.json (optional)
         """
         self._cfg = safety_envelope_config

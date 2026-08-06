@@ -3,7 +3,7 @@
     {
       "canonical_name": "setpoint_rpm",
       "unit": "rpm",
-      "description": "PID speed reference / command setpoint",
+      "description": "Commanded operating point in plant units. On this rig the PLC command register sets motor VOLTAGE, not speed, and saturates at the supply rail, so this signal is produced by the calibrated piecewise lookup in raw_source_mapping.yaml:command_calibration \u2014 NOT by a linear scale. The previous linear scale (0.161172 rpm/count) capped it at 621 RPM for a motor that reaches 1082 RPM. Samples repaired by the register despike carry quality 2.",
       "measured_or_derived": "measured",
       "required": true,
       "quality_flag_default": 1,
@@ -27,125 +27,34 @@
       "fallback_source": "drive_speed_estimate"
     },
     {
-      "canonical_name": "current_a",
-      "unit": "A",
-      "description": "Drive output current",
+      "canonical_name": "voltage_v",
+      "unit": "V",
+      "description": "Motor TERMINAL voltage \u2014 the realised actuation, not an independent supply rail. It tracks the command register and clamps at 24.8 V; corr(voltage_v, speed_rpm) = 0.994 because the rig is open loop (speed = 39.27 RPM/V). Retained despite that collinearity because the residual around the ratio is the fault signal, and because it is the MPC's manipulated variable.",
       "measured_or_derived": "measured",
       "required": true,
       "quality_flag_default": 1,
       "model_usage": [
         "lstm_anomaly",
         "mpc_setpoint"
+      ],
+      "fallback_source": null
+    },
+    {
+      "canonical_name": "current_a",
+      "unit": "A",
+      "description": "Supply current. Kept in RAW form for fast fault transients. At the native rate it is largely measurement noise (acf(1) = 0.205) \u2014 the load-carrying component is exposed separately as current_lp15_a.",
+      "measured_or_derived": "measured",
+      "required": true,
+      "quality_flag_default": 1,
+      "model_usage": [
+        "lstm_anomaly"
       ],
       "fallback_source": "phase_current_estimate"
     },
     {
-      "canonical_name": "temp_c",
-      "unit": "degC",
-      "description": "Motor/drive temperature. NO physical temperature sensor on this hardware (see DATASET_ISSUES.md [2026-06-06]); supplied as an I^2R thermal estimate from current, the same way load_torque_est_nm is estimated from current. Required as an MPC plant state and an LSTM anomaly feature. NOTE: measured_or_derived stays \"measured\" here in the historian sense \u2014 temp_c is INGESTED as an external input (it is NOT produced by the derive_signals step, which is what \"derived\" means in this pipeline). Its estimated origin is recorded via quality_flag_default=2 (derived_or_estimated) and the thermal_estimate_i2r source_method, not via the schema's measured/derived enum. See DECISION_LOG.md [2026-06-06].",
-      "measured_or_derived": "measured",
-      "required": true,
-      "quality_flag_default": 2,
-      "model_usage": [
-        "lstm_anomaly",
-        "mpc_setpoint"
-      ],
-      "fallback_source": "thermal_estimate_i2r"
-    },
-    {
-      "canonical_name": "voltage_v",
-      "unit": "V",
-      "description": "DC bus or supply voltage",
-      "measured_or_derived": "measured",
-      "required": true,
-      "quality_flag_default": 1,
-      "model_usage": [
-        "lstm_anomaly"
-      ],
-      "fallback_source": null
-    },
-    {
-      "canonical_name": "load_torque_nm",
-      "unit": "Nm",
-      "description": "Drive actual torque output (if available)",
-      "measured_or_derived": "measured",
-      "required": false,
-      "quality_flag_default": 1,
-      "model_usage": [],
-      "fallback_source": "load_torque_est_nm"
-    },
-    {
-      "canonical_name": "load_torque_est_nm",
-      "unit": "Nm",
-      "description": "Estimated torque from current \u2014 Kt * max(I - I_no_load, 0)",
-      "measured_or_derived": "derived",
-      "required": true,
-      "quality_flag_default": 2,
-      "model_usage": [
-        "lstm_anomaly"
-      ],
-      "fallback_source": null
-    },
-    {
       "canonical_name": "tracking_error_rpm",
       "unit": "rpm",
-      "description": "setpoint_rpm - speed_rpm",
-      "measured_or_derived": "derived",
-      "required": true,
-      "quality_flag_default": 2,
-      "model_usage": [
-        "lstm_anomaly"
-      ],
-      "fallback_source": null
-    },
-    {
-      "canonical_name": "setpoint_delta_rpm",
-      "unit": "rpm",
-      "description": "setpoint_rpm[t] - setpoint_rpm[t-1]",
-      "measured_or_derived": "derived",
-      "required": true,
-      "quality_flag_default": 2,
-      "model_usage": [],
-      "fallback_source": null
-    },
-    {
-      "canonical_name": "speed_delta_rpm",
-      "unit": "rpm",
-      "description": "speed_rpm[t] - speed_rpm[t-1]",
-      "measured_or_derived": "derived",
-      "required": true,
-      "quality_flag_default": 2,
-      "model_usage": [],
-      "fallback_source": null
-    },
-    {
-      "canonical_name": "power_w",
-      "unit": "W",
-      "description": "Electrical input power = voltage_v * current_a. This is precisely what the INA219 power register (INA_mW) reports: profiling the acquisition file showed that register is the on-chip product of the bus-voltage and current registers (median relative error 0.26%), not an independent measurement. It is therefore computed rather than ingested, so the model is not fed the same information twice under two names.",
-      "measured_or_derived": "derived",
-      "required": true,
-      "quality_flag_default": 2,
-      "model_usage": [
-        "lstm_anomaly"
-      ],
-      "fallback_source": null
-    },
-    {
-      "canonical_name": "mech_power_w",
-      "unit": "W",
-      "description": "Mechanical shaft power = load_torque_est_nm * speed_rpm * 2*pi/60. Together with power_w it separates \"drawing current and doing work\" from \"drawing current and doing nothing\" (a jam).",
-      "measured_or_derived": "derived",
-      "required": true,
-      "quality_flag_default": 2,
-      "model_usage": [
-        "lstm_anomaly"
-      ],
-      "fallback_source": null
-    },
-    {
-      "canonical_name": "efficiency_est",
-      "unit": "ratio",
-      "description": "Drivetrain efficiency estimate = clip(mech_power_w / power_w, 0, 1). Clipped because values above 1 are physically impossible and would only signal torque-estimate drift. A collapse toward 0 while power_w stays high is the signature of a stalled or jammed belt.",
+      "description": "setpoint_rpm - speed_rpm. SEMANTICS CHANGED 2026-08-04: this rig has no closed speed loop, so this is the deviation from the commanded level's own measured steady-state operating point, not a servo error. It remains the strongest single fault feature (std 21.3 RPM, acf(1) 0.407, |r| <= 0.07 against speed / voltage / setpoint).",
       "measured_or_derived": "derived",
       "required": true,
       "quality_flag_default": 2,
@@ -167,9 +76,9 @@
       "fallback_source": null
     },
     {
-      "canonical_name": "tracking_error_integral_rpm_s",
-      "unit": "rpm*s",
-      "description": "LEAKY accumulation of tracking_error_rpm * dt \u2014 the observable proxy for the PID integral term. A sustained non-zero value means the loop cannot reach its target (slipping belt, jam, supply sag), which a single-sample error cannot reveal. The leak (exp(-dt/error_integral_tau_s)) is essential, not cosmetic: tracking error on a loaded conveyor has a persistent non-zero mean, so a plain sum is a drifting random walk that runs to its clamp and stays there \u2014 measured at 93.7% of samples pinned on the first build, i.e. a constant. With the leak, steady state under a constant error e is e*tau, so the feature measures how badly and how persistently the loop is missing. error_integral_clamp_s * rated_speed_rpm remains as a hard backstop.",
+      "canonical_name": "power_w",
+      "unit": "W",
+      "description": "Electrical input power = voltage_v * current_a. Included because a product is not reachable by the model's linear input layer.",
       "measured_or_derived": "derived",
       "required": true,
       "quality_flag_default": 2,
@@ -179,39 +88,46 @@
       "fallback_source": null
     },
     {
-      "canonical_name": "tracking_error_pct",
-      "unit": "percent",
-      "description": "Tracking error normalised by commanded speed: 100 * tracking_error_rpm / max(|setpoint_rpm|, 1). Makes a 20 RPM error at 330 RPM and at 660 RPM comparable.",
+      "canonical_name": "current_lp15_a",
+      "unit": "A",
+      "description": "15 s TRAILING mean of current_a. Raw current on this rig is acf(1) = 0.205 \u2014 noise with the load component buried in it; the trailing mean recovers it (acf(1) = 0.986 at n=15). 15 s is the knee between clearing the noise and smearing the ~5 s transient a jam produces. Also the MPC's second plant state, because raw current is not identifiable.",
       "measured_or_derived": "derived",
       "required": true,
       "quality_flag_default": 2,
-      "model_usage": [],
+      "model_usage": [
+        "lstm_anomaly",
+        "mpc_setpoint"
+      ],
       "fallback_source": null
     },
     {
-      "canonical_name": "resistance_est_ohm",
-      "unit": "ohm",
-      "description": "Apparent load resistance = voltage_v / max(current_a, 1e-4). Rises toward an open circuit (broken winding / lost connection) and falls toward a short. Complements power_w because it is a ratio rather than a product.",
+      "canonical_name": "current_ripple_a",
+      "unit": "A",
+      "description": "15 s TRAILING standard deviation of current_a (acf(1) = 0.978). Separates \"noisy current\" from \"high current\" \u2014 a distinction the raw channel cannot express, and the signature of commutation or mechanical roughness.",
       "measured_or_derived": "derived",
       "required": true,
       "quality_flag_default": 2,
-      "model_usage": [],
+      "model_usage": [
+        "lstm_anomaly"
+      ],
       "fallback_source": null
     },
     {
-      "canonical_name": "power_delta_w",
-      "unit": "W",
-      "description": "power_w[t] - power_w[t-1] \u2014 electrical power transient.",
+      "canonical_name": "speed_per_volt_rpm_v",
+      "unit": "rpm/V",
+      "description": "speed_rpm / voltage_v, guarded at voltage_v > 1 (reported as 0 when the motor is de-energised, which is a real operating state on this rig \u2014 4 commanded stops). Median 39.27 RPM/V, CV 4.6%, and |r| <= 0.17 against EVERY other feature: the most genuinely independent signal in the set. A fall in RPM-per-volt at an unchanged command is what mechanical binding, belt overload or brush wear looks like, and neither speed nor voltage shows it alone.",
       "measured_or_derived": "derived",
       "required": true,
       "quality_flag_default": 2,
-      "model_usage": [],
+      "model_usage": [
+        "lstm_anomaly"
+      ],
       "fallback_source": null
     },
     {
-      "canonical_name": "thermal_margin_c",
-      "unit": "degC",
-      "description": "Headroom to the configured limit = max_safe_temp_c - temp_c. NOTE: this is an audit/telemetry signal only. It does NOT make the safety envelope enforce a temperature limit \u2014 that remains unwired, see OPEN_QUESTIONS #31.",
+      "canonical_name": "speed_delta_rpm",
+      "unit": "rpm",
+      "description": "speed_rpm[t] - speed_rpm[t-1] \u2014 intermediate for accel_rpm_s.",
       "measured_or_derived": "derived",
       "required": true,
       "quality_flag_default": 2,
@@ -221,7 +137,7 @@
     {
       "canonical_name": "current_margin_a",
       "unit": "A",
-      "description": "Headroom to the configured limit = max_safe_current_a - current_a. Audit / telemetry signal; the hard current block lives in safety_envelope.py.",
+      "description": "Headroom to the configured limit = max_safe_current_a - current_a. Audit / telemetry signal only; excluded from the feature set because it is a constant minus a channel already present. The hard current block lives in safety_envelope.py.",
       "measured_or_derived": "derived",
       "required": true,
       "quality_flag_default": 2,
@@ -229,15 +145,23 @@
       "fallback_source": null
     },
     {
-      "canonical_name": "pid_output_percent",
-      "unit": "percent",
-      "description": "PID controller output percentage",
+      "canonical_name": "load_torque_nm",
+      "unit": "Nm",
+      "description": "Drive actual torque output (if available)",
       "measured_or_derived": "measured",
       "required": false,
       "quality_flag_default": 1,
-      "model_usage": [
-        "lstm_anomaly"
-      ],
+      "model_usage": [],
+      "fallback_source": null
+    },
+    {
+      "canonical_name": "pid_output_percent",
+      "unit": "percent",
+      "description": "PID controller output percentage. NOT present on this rig \u2014 the bench hardware is open loop (see DECISION_LOG.md [2026-08-04]).",
+      "measured_or_derived": "measured",
+      "required": false,
+      "quality_flag_default": 1,
+      "model_usage": [],
       "fallback_source": null
     },
     {

@@ -2,16 +2,14 @@
   "features": [
     "setpoint_rpm",
     "speed_rpm",
-    "tracking_error_rpm",
-    "current_a",
-    "temp_c",
     "voltage_v",
-    "load_torque_est_nm",
-    "power_w",
-    "mech_power_w",
-    "efficiency_est",
+    "current_a",
+    "current_lp15_a",
+    "tracking_error_rpm",
     "accel_rpm_s",
-    "tracking_error_integral_rpm_s"
+    "power_w",
+    "speed_per_volt_rpm_v",
+    "current_ripple_a"
   ],
   "window_size": 50,
   "stride": 1,

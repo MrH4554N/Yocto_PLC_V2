@@ -8,6 +8,7 @@ S = "${UNPACKDIR}"
 SRC_URI = " \
     file://hmi_fx_ai.py \
     file://config.py \
+    file://command_map.py \
     file://core \
     file://services \
     file://ui \
@@ -34,6 +35,7 @@ do_install() {
     install -d ${D}${APP_INSTALL_DIR}
     install -m 0755 ${UNPACKDIR}/hmi_fx_ai.py ${D}${APP_INSTALL_DIR}/
     install -m 0644 ${UNPACKDIR}/config.py ${D}${APP_INSTALL_DIR}/
+    install -m 0644 ${UNPACKDIR}/command_map.py ${D}${APP_INSTALL_DIR}/
 
     install -m 0644 ${UNPACKDIR}/mqtt_secrets.example.py ${D}${APP_INSTALL_DIR}/
     install -m 0644 ${UNPACKDIR}/mqtt_secrets.py ${D}${APP_INSTALL_DIR}/

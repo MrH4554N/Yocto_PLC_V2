@@ -1,8 +1,16 @@
 {
-  "_comment": "MPC cost weights for the bench conveyor rig (2026-07-28). Cost = e'Qe [RPM^2] + du'R du [RPM^2] + rho_I*eps_I^2 [A^2] + rho_T*eps_T^2 [degC^2].",
-  "_scaling_note": "These four terms have wildly mismatched natural scales: a 100 RPM tracking error contributes 1e4 while a 0.01 A current overshoot contributes rho_I*1e-4. Making the current slack genuinely competitive would need rho_I ~ 5e7, which drives the QP condition number to ~1e8 and pushes osqp to max_iter (measured: 20-22 ms per solve at the constraint boundary, over the 10 ms Pi budget, with spurious mpc_solver_error blocks). rho_I=1e3 / rho_T=1e2 was selected by sweep as the largest pair that keeps every tested state solving cleanly: 300 states sampled from the training set gave p95 = 1.36 ms / max 2.87 ms / 0 blocks, and 7 hand-built edge states (at and beyond both soft limits) all returned status=solved with a worst case of 5.24 ms. At this level the slack variables still REPORT violations accurately (0.0317 A reported at I=0.29 A; 4.87 degC at T=75 degC) but the penalty is too weak to make the MPC trade tracking away to avoid them. Current and temperature protection therefore rests on the hard input bound u_max and on safety_envelope.py, not on these soft constraints. The proper fix is per-state scaling inside the QP - see OPEN_QUESTIONS #35.",
-  "Q": [[1.0]],
-  "R": [[0.5]],
-  "rho_I": 1000.0,
-  "rho_T": 100.0
+  "_comment": "MPC cost weights, bench conveyor rig (2026-08-05). Cost = e'Qe [RPM^2] + du'R du [V^2] + rho_I*eps_I^2 [A^2].",
+  "_R_derivation": "R RESCALED 0.5 -> 771.2 because the input unit changed from RPM to VOLTS. Keeping R = 0.5 would have made the move-suppression term 1542x weaker than it was tuned to be (39.2742^2), because the same physical step is a ~39x smaller number in volts. R_V = R_RPM * rpm_per_volt^2 = 0.5 * 39.2742^2 = 771.2 reproduces the previous control effort exactly.",
+  "_rho_I_note": "Unchanged at 1e3, and still too weak to make the controller trade tracking away to avoid the current limit - the cost mixes RPM^2 with A^2. It reports violations accurately; protection rests on the hard u_max bound and safety_envelope.py. OPEN_QUESTIONS #35. rho_T was REMOVED: there is no thermal state to penalise.",
+  "Q": [
+    [
+      1.0
+    ]
+  ],
+  "R": [
+    [
+      771.2
+    ]
+  ],
+  "rho_I": 1000.0
 }

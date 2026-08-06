@@ -15,10 +15,24 @@ Safety invariants (never overrideable):
 
 Invariant 15: when the MPC QP fails to solve, the advisory must be blocked
 with ``block_reason`` set; never propagate a stale recommendation.
+
+Two things about the current artifact drive the shape of this module:
+
+* The LSTM is a **next-step predictor**, not a whole-window autoencoder: it
+  takes ``window_size`` consecutive samples and predicts the one after them.
+  The anomaly score is the MSE between that prediction and the sample that
+  actually arrived, so the engine has to keep a rolling window of real
+  history — a single observation cannot be scored on its own.
+* The MPC plant is ``[speed_rpm, current_lp15_a]`` driven by **voltage**.
+  The QP therefore solves in volts and the answer is converted to the
+  operator-facing RPM setpoint with ``rpm_per_volt`` before the safety
+  envelope (whose bounds are in RPM) sees it.
 """
 
 from __future__ import annotations
 
+import time
+from collections import deque
 from datetime import datetime, timezone
 
 import numpy as np
@@ -32,6 +46,18 @@ except ImportError:
 from .artifact_loader import ArtifactLoader
 from .mpc_controller import MPCController
 from .safety_envelope import SafetyEnvelope
+
+
+# Sampling period of the training data. The window must span the same amount of
+# wall-clock time it did at training time, so samples arriving faster than this
+# are used to update the caller's filters but not admitted to the window.
+DEFAULT_SAMPLE_PERIOD_S = 1.0
+
+# Signals echoed back to the operator/MQTT alongside the recommendation.
+CURRENT_STATE_KEYS = [
+    "setpoint_rpm", "speed_rpm", "tracking_error_rpm",
+    "current_a", "current_lp15_a", "voltage_v", "power_w",
+]
 
 
 class InferenceEngine:
@@ -51,12 +77,27 @@ class InferenceEngine:
         self._scaler_scale: np.ndarray | None = None
         self._scaler_data_min: np.ndarray | None = None
         self._scaler_data_range: np.ndarray | None = None
+        # Rolling window of scaled samples: window_size inputs + 1 target
+        self._window: deque = deque()
+        self._window_size = 0
+        self._sample_period_s = DEFAULT_SAMPLE_PERIOD_S
+        self._last_admit_ts: float | None = None
+        self.rpm_per_volt = 0.0
 
     def load(self) -> None:
         self._feature_list = _normalize_feature_list(
             self._loader.load_json("preprocessing/feature_list.json")
         )
         self._scaler_params = self._loader.load_json("preprocessing/scaler.json")
+
+        scaler_features = _normalize_feature_list(self._scaler_params)
+        if scaler_features and scaler_features != self._feature_list:
+            raise ValueError(
+                "scaler.json feature order differs from feature_list.json — "
+                "model and scaler are not from the same training run:\n"
+                f"  feature_list: {self._feature_list}\n"
+                f"  scaler      : {scaler_features}"
+            )
 
         try:
             self._anomaly_window_config = self._loader.load_json("lstm_anomaly/window_config.json")
@@ -82,6 +123,23 @@ class InferenceEngine:
             self._scaler_data_min = data_min
             self._scaler_data_range = np.where(data_range == 0, 1.0, data_range)
 
+        # ----- Rolling window for the next-step predictor -----
+        # window_size counts INPUT steps; one more slot holds the sample the
+        # prediction is scored against.
+        self._window_size = int(self._anomaly_window_config.get("window_size", 49))
+        self._window = deque(maxlen=self._window_size + 1)
+
+        system_parameters = self._load_optional_json("preprocessing/system_parameters.json")
+        period_ms = system_parameters.get("sampling", {}).get("resample_period_ms")
+        if period_ms:
+            self._sample_period_s = float(period_ms) / 1000.0
+
+        # ----- Volts → RPM for the operator-facing recommendation -----
+        self.rpm_per_volt = _resolve_rpm_per_volt(
+            system_parameters,
+            self._load_optional_json("preprocessing/command_calibration.json"),
+        )
+
         # ----- MPC controller (replaces the deprecated PPO path) -----
         # The MPC config lives under mpc/ in the artifact bundle. The
         # safety_envelope.json file is still under mpc/ (a separate concept
@@ -102,10 +160,53 @@ class InferenceEngine:
                 self._anomaly_session = ort.InferenceSession(anomaly_path)
             except Exception:
                 self._anomaly_session = None
+            _check_model_width(self._anomaly_session, len(self._feature_list))
 
         self._loaded = True
 
-    def run_advisory(self, observation: dict[str, float]) -> dict:
+    # ------------------------------------------------------------------
+    # Rolling window
+    # ------------------------------------------------------------------
+
+    def observe(self, observation: dict[str, float], ts: float | None = None) -> bool:
+        """Offer one sample to the anomaly window. Returns True if admitted.
+
+        Call this every acquisition cycle, not only on advisory ticks: the
+        window has to hold real consecutive history for the predictor to mean
+        anything. Samples arriving faster than the training sample period are
+        dropped here (the caller's own filters still see them), so a 2 Hz
+        acquisition loop still produces a window spanning the same 49 s it did
+        at training time.
+        """
+        if not self._loaded:
+            raise RuntimeError("load() must be called before observe()")
+
+        ts = time.monotonic() if ts is None else float(ts)
+        if (self._last_admit_ts is not None
+                and (ts - self._last_admit_ts) < self._sample_period_s * 0.98):
+            return False
+
+        vec = self._build_feature_vector(observation)
+        if not np.all(np.isfinite(vec)):
+            # One bad channel must not poison the next 49 s of window.
+            return False
+
+        self._last_admit_ts = ts
+        self._window.append(vec)
+        return True
+
+    @property
+    def warmup_remaining(self) -> int:
+        """Samples still needed before an anomaly score can be produced."""
+        return max(0, self._window_size + 1 - len(self._window))
+
+    def reset_window(self) -> None:
+        self._window.clear()
+        self._last_admit_ts = None
+
+    # ------------------------------------------------------------------
+
+    def run_advisory(self, observation: dict[str, float], ts: float | None = None) -> dict:
         """Run inference on a single observation dict (canonical signal names → float).
 
         Returns advisory JSON conforming to ``advisory_contract.md`` (with the
@@ -115,32 +216,36 @@ class InferenceEngine:
         if not self._loaded:
             raise RuntimeError("load() must be called before run_advisory()")
 
-        ts = datetime.now(timezone.utc).isoformat()
+        # Harmless if the caller already fed this sample through observe():
+        # the sample-period gate admits it at most once.
+        self.observe(observation, ts=ts)
 
-        # Build scaled feature vector (used only for anomaly detection)
-        feature_vec = self._build_feature_vector(observation)
+        ts_utc = datetime.now(timezone.utc).isoformat()
 
-        # Anomaly score
-        anomaly_score = self._compute_anomaly_score(feature_vec)
+        # Anomaly score over the accumulated window (None until it is full)
+        anomaly_score = self._compute_anomaly_score()
         warning_threshold = self._anomaly_thresholds.get("warning_threshold")
         critical_threshold = self._anomaly_thresholds.get("critical_threshold")
 
-        # MPC recommendation
+        # MPC recommendation. The plant is driven by voltage, so the previous
+        # input is the voltage currently across the motor, and the states are
+        # measured speed plus the 15 s filtered current.
         current_setpoint = float(observation.get("setpoint_rpm", 0.0))
         x0 = np.array([
             float(observation.get("speed_rpm", 0.0)),
-            float(observation.get("current_a", 0.0)),
-            float(observation.get("temp_c", 0.0)),
+            float(observation.get("current_lp15_a", observation.get("current_a", 0.0))),
         ], dtype=np.float64)
+        u_prev = float(observation.get("voltage_v", 0.0))
         # The reference is whatever speed the operator has currently commanded —
         # the MPC's job is to take a smooth path TO that reference while
-        # respecting current and temperature constraints. In v1 the reference
-        # is the current setpoint; M4 may extend to operator-supplied targets.
+        # respecting the current constraint. In v1 the reference is the current
+        # setpoint; M4 may extend to operator-supplied targets.
         r_ref = current_setpoint
-        mpc_result = self._mpc.compute(x0=x0, r=r_ref, u_prev=current_setpoint)
+        mpc_result = self._mpc.compute(x0=x0, r=r_ref, u_prev=u_prev)
 
         mpc_status = mpc_result["status"]
         mpc_block_reason = mpc_result["block_reason"]
+        recommended_voltage = mpc_result.get("u_next")
 
         # --- Invariant 15: MPC infeasibility → fail-safe ---
         if mpc_block_reason is not None:
@@ -153,9 +258,9 @@ class InferenceEngine:
             }
             envelope_state = "blocked"
         else:
-            # MPC produced an absolute setpoint; convert to delta for the
-            # advisory contract.
-            raw_setpoint = float(mpc_result["u_next"])
+            # The QP answers in volts; the operator commands RPM. Convert with
+            # the measured rpm_per_volt before the RPM-denominated envelope.
+            raw_setpoint = float(recommended_voltage) * self.rpm_per_volt
             raw_delta = raw_setpoint - current_setpoint
 
             envelope_result = self._safety_envelope.apply(
@@ -185,25 +290,23 @@ class InferenceEngine:
                 }
 
         advisory = {
-            "timestamp_utc": ts,
+            "timestamp_utc": ts_utc,
             "mode": "advisory_only",
             "system_id": "ihcs_servo_conveyor",
-            "current_state": {k: observation.get(k) for k in [
-                "setpoint_rpm", "speed_rpm", "tracking_error_rpm",
-                "current_a", "temp_c", "voltage_v", "load_torque_est_nm",
-            ]},
+            "current_state": {k: observation.get(k) for k in CURRENT_STATE_KEYS},
             "recommendation": recommendation,
             "model_evidence": {
                 "mpc_controller_version": self._manifest.get("artifact_version", "unknown"),
                 "mpc_solver_status": mpc_status,
                 "mpc_iterations": mpc_result.get("iterations"),
                 "mpc_solve_ms": round(mpc_result.get("solve_ms", 0.0), 3),
+                "mpc_recommended_voltage_v": _safe_round(recommended_voltage, 4),
                 "mpc_slack_violation_current_a": _safe_round(
                     mpc_result.get("slack_violation_current_a"), 6),
-                "mpc_slack_violation_temp_c": _safe_round(
-                    mpc_result.get("slack_violation_temp_c"), 6),
                 "lstm_anomaly_score": round(anomaly_score, 6) if anomaly_score is not None else None,
                 "anomaly_threshold": warning_threshold,
+                "anomaly_critical_threshold": critical_threshold,
+                "anomaly_warmup_remaining": self.warmup_remaining,
             },
             "safety": {
                 "safety_envelope": envelope_state,
@@ -224,6 +327,12 @@ class InferenceEngine:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _load_optional_json(self, rel_path: str) -> dict:
+        try:
+            return self._loader.load_json(rel_path)
+        except FileNotFoundError:
+            return {}
+
     def _build_feature_vector(self, observation: dict[str, float]) -> np.ndarray:
         if not self._feature_list:
             return np.zeros((1,), dtype=np.float32)
@@ -237,21 +346,22 @@ class InferenceEngine:
             return (raw - self._scaler_data_min) / self._scaler_data_range
         return raw
 
-    def _compute_anomaly_score(self, feature_vec: np.ndarray) -> float | None:
+    def _compute_anomaly_score(self) -> float | None:
+        """MSE between the predicted next step and the one actually measured."""
         if not _ORT_AVAILABLE or self._anomaly_session is None:
             return None
+        if len(self._window) <= self._window_size:
+            return None
 
-        window_size = self._anomaly_window_config.get("window_size", 50)
-        n_features = len(self._feature_list) if self._feature_list else feature_vec.shape[0]
+        window = np.stack(list(self._window))              # (window_size+1, n_features)
+        inputs = window[:-1][None, :, :].astype(np.float32)
+        target = window[-1]
 
-        window = np.tile(feature_vec, (window_size, 1)).reshape(
-            1, window_size, n_features).astype(np.float32)
         input_name = self._anomaly_session.get_inputs()[0].name
         try:
-            outputs = self._anomaly_session.run(None, {input_name: window})
-            reconstruction = outputs[0]
-            mse = float(np.mean((window - reconstruction) ** 2))
-            return mse
+            outputs = self._anomaly_session.run(None, {input_name: inputs})
+            prediction = np.asarray(outputs[0], dtype=np.float32).reshape(-1)
+            return float(np.mean((prediction - target) ** 2))
         except Exception:
             return None
 
@@ -278,6 +388,40 @@ def _normalize_feature_list(raw: object) -> list[str]:
     if not isinstance(raw, list):
         return []
     return [str(item) for item in raw]
+
+
+def _resolve_rpm_per_volt(system_parameters: dict, command_calibration: dict) -> float:
+    """Steady-state RPM produced per volt across the motor.
+
+    The MPC manipulates voltage but the operator commands RPM, so this factor
+    is what makes the recommendation readable. It is measured, not assumed:
+    fail loudly rather than invent one, otherwise every recommendation would be
+    silently scaled wrong.
+    """
+    value = system_parameters.get("motor", {}).get("rpm_per_volt")
+    if value is None:
+        value = command_calibration.get("rpm_per_volt")
+    if value is None:
+        raise ValueError(
+            "rpm_per_volt missing from both preprocessing/system_parameters.json "
+            "and preprocessing/command_calibration.json — cannot convert the MPC "
+            "voltage solution into an RPM setpoint recommendation"
+        )
+    return float(value)
+
+
+def _check_model_width(session, n_features: int) -> None:
+    """Guard against an ONNX file and a scaler from different training runs."""
+    if session is None:
+        return
+    shape = session.get_inputs()[0].shape
+    model_features = shape[-1] if shape else None
+    if isinstance(model_features, int) and model_features != n_features:
+        raise ValueError(
+            f"model.onnx takes {model_features} features but the artifact "
+            f"declares {n_features} — model and preprocessing config are not "
+            "from the same training run"
+        )
 
 
 def _scaler_value(params: dict, base_key: str, n: int, default: float) -> list[float]:

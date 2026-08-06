@@ -2,148 +2,180 @@
 # -*- coding: utf-8 -*-
 """Cầu nối giữa telemetry của HMI và runtime advisory IHCS.
 
-HMI chỉ đo được 3 đại lượng: tốc độ (D120 qua Modbus), điện áp và dòng điện
-(INA219/INA226 qua I2C). Artifact IHCS lại cần đủ 12 feature theo
-``preprocessing/feature_list.json``. Module này lấp khoảng trống đó:
+HMI đo được 4 kênh: tốc độ (D120), thanh ghi lệnh (D8116) qua Computer Link,
+điện áp và dòng điện (INA219/INA226 qua I2C). Artifact IHCS cần đủ 10 feature
+theo ``preprocessing/feature_list.json``. Module này lấp khoảng trống đó:
 
-  • ObservationBuilder — dựng 12 feature từ 3 phép đo + setpoint hiện hành,
-    dùng đúng công thức của Phase_1 ``preprocessing/derive_signals.py`` để
-    dữ liệu suy luận trùng phân phối với dữ liệu huấn luyện.
+  • ObservationBuilder — dựng 10 feature từ 4 phép đo, dùng đúng công thức của
+    Phase_1 ``preprocessing/derive_signals.py`` để dữ liệu suy luận trùng phân
+    phối với dữ liệu huấn luyện.
   • IHCSAdvisor       — nạp artifact, chạy advisory, tự hạ cấp xuống chế độ
     chỉ-phát-hiện-bất-thường nếu image thiếu osqp/scipy (phần MPC).
   • format_advisory   — đổi advisory JSON thành chuỗi hiển thị cho HMI.
 
 Chế độ advisory-only được giữ nguyên: module này KHÔNG ghi PLC.
+
+MỌI ĐẶC TRƯNG ĐỀU NHÂN QUẢ: chỉ tính từ mẫu tại thời điểm <= t (cửa sổ
+TRAILING). Lúc train dùng đúng định nghĩa này, và ở runtime cũng không thể
+nhìn thấy mẫu tương lai.
 """
 
 import json
 import math
 import os
+import sys
 import time
+from collections import deque
 from pathlib import Path
 
 import numpy as np
 
+try:
+    from command_map import CommandMap
+except ImportError:   # chạy trực tiếp file này: thư mục gốc app chưa có trong sys.path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from command_map import CommandMap
+
 DEFAULT_ARTIFACT_DIR = os.environ.get(
     "IHCS_ARTIFACT_DIR", "/usr/share/hmi-app/artifact")
 
-RPM_TO_RAD_S = 2.0 * math.pi / 60.0
-_EPS_POWER_W = 1e-3
+# Cửa sổ trailing của bộ lọc dòng — khớp current_filter_window_s lúc train.
+CURRENT_FILTER_WINDOW_S = 15.0
+# Dưới mức này coi như động cơ không được cấp điện (khớp derive_signals.py).
+MIN_VOLTAGE_FOR_RATIO_V = 1.0
+# Nhịp lấy mẫu lúc train, dùng làm khoảng tính gia tốc.
+DEFAULT_SAMPLE_PERIOD_S = 1.0
 
-# Mặc định của derive_signals.py khi system_parameters không khai báo
-DEFAULT_ERROR_INTEGRAL_TAU_S = 60.0
-DEFAULT_ERROR_INTEGRAL_CLAMP_S = 100.0
+# Các kênh gửi kèm advisory cho người vận hành / MQTT.
+CURRENT_STATE_KEYS = [
+    "setpoint_rpm", "speed_rpm", "tracking_error_rpm",
+    "current_a", "current_lp15_a", "voltage_v", "power_w",
+]
 
 
 # ==========================================================================
 # DỰNG OBSERVATION
 # ==========================================================================
 class ObservationBuilder:
-    """Suy ra 12 feature của artifact từ telemetry thô của HMI.
+    """Suy ra 10 feature của artifact từ telemetry thô của HMI.
 
-    Gọi update() mỗi chu kỳ đọc phần cứng (không phải mỗi chu kỳ AI) — bộ tích
-    phân sai số và mô hình nhiệt là hệ động học theo thời gian, bỏ mẫu sẽ làm
-    lệch giá trị.
+    Gọi update() mỗi chu kỳ đọc phần cứng (không phải mỗi chu kỳ AI) — bộ lọc
+    dòng 15 giây và gia tốc là hệ động học theo thời gian, bỏ mẫu sẽ làm lệch
+    giá trị.
+
+    Cửa sổ tính theo THỜI GIAN chứ không theo số mẫu: HMI đọc 2 Hz còn model
+    học ở 1 Hz, nếu đếm mẫu thì "15 mẫu" ở runtime chỉ trải 7,5 giây và bộ lọc
+    sẽ có ý nghĩa khác hẳn thứ nó được dạy.
     """
 
-    def __init__(self, system_parameters: dict):
+    def __init__(self, system_parameters: dict, command_calibration: dict = None):
         motor = system_parameters.get("motor", {})
-        sim = system_parameters.get("simulation", {})
+        sampling = system_parameters.get("sampling", {})
 
-        self.kt = float(motor.get("Kt", 0.1736))
-        self.i_no_load = float(motor.get("no_load_current_a", 0.02))
-        self.rated_speed = float(motor.get("rated_speed_rpm", 660.0))
+        period_ms = sampling.get("resample_period_ms")
+        self.sample_period_s = (float(period_ms) / 1000.0 if period_ms
+                                else DEFAULT_SAMPLE_PERIOD_S)
+        self.current_window_s = float(
+            system_parameters.get("current_filter_window_s",
+                                  CURRENT_FILTER_WINDOW_S))
 
-        # Không có cảm biến nhiệt trên phần cứng này: temp_c là ước lượng I^2R,
-        # đúng như cách tập huấn luyện sinh ra nó (signal_registry.json ghi
-        # source_method = thermal_estimate_i2r, quality_flag = 2).
-        self.ambient_temp_c = float(sim.get("ambient_temp_c", 28.0))
-        self.r_winding = float(sim.get("winding_resistance_ohm", 20.0))
-        self.r_thermal = float(sim.get("thermal_resistance_c_per_w", 15.0))
-        self.c_thermal = float(sim.get("thermal_mass_j_per_c", 30.0))
-
-        self.tau_integral = float(
-            system_parameters.get("error_integral_tau_s",
-                                  DEFAULT_ERROR_INTEGRAL_TAU_S))
-        self.clamp_integral = float(
-            system_parameters.get("error_integral_clamp_s",
-                                  DEFAULT_ERROR_INTEGRAL_CLAMP_S)) * self.rated_speed
-
-        self.default_dt = float(sim.get("dt", 1.0)) or 1.0
+        # Thanh ghi lệnh điều khiển ĐIỆN ÁP và bão hoà ở rail nguồn, nên
+        # setpoint_rpm phải tra bảng đo được. Không có bảng (hoặc không đọc
+        # được thanh ghi) thì suy từ điện áp đang đặt vào — xem degraded bên
+        # dưới.
+        self.command_map = CommandMap(command_calibration)
+        self.rpm_per_volt = float(
+            motor.get("rpm_per_volt")
+            or (command_calibration or {}).get("rpm_per_volt")
+            or 0.0)
+        self.degraded_no_register = False
 
         # --- trạng thái tích lũy ---
-        self.temp_c = self.ambient_temp_c
-        self.error_integral = 0.0
-        self.prev_speed = None
-        self.prev_ts = None
+        self.current_hist = deque()      # (ts, current_a) trong 15 giây gần nhất
+        self.speed_hist = deque()        # (ts, speed_rpm) đủ để tính gia tốc 1 s
         self.n_samples = 0
 
     def reset(self):
-        self.temp_c = self.ambient_temp_c
-        self.error_integral = 0.0
-        self.prev_speed = None
-        self.prev_ts = None
+        self.current_hist.clear()
+        self.speed_hist.clear()
+        self.degraded_no_register = False
         self.n_samples = 0
 
-    def update(self, speed_rpm, voltage_v, current_a, setpoint_rpm, ts=None):
-        """Cập nhật một mẫu telemetry, trả về observation đầy đủ 12 feature."""
+    def setpoint_from(self, voltage_v, cmd_register=None):
+        """Điểm làm việc được lệnh, quy ra rpm.
+
+        Có thanh ghi thì tra bảng hiệu chuẩn (13 điểm đo thật). Không có thì
+        chạy CHẾ ĐỘ SUY GIẢM: suy từ điện áp đang đặt vào. Vẫn phát hiện được
+        lỗi cơ khí, nhưng tracking_error_rpm không còn phản ánh lỗi bám lệnh.
+        """
+        if cmd_register is not None:
+            return self.command_map.raw_to_speed(cmd_register)
+        self.degraded_no_register = True
+        return float(voltage_v) * self.rpm_per_volt
+
+    def update(self, speed_rpm, voltage_v, current_a, cmd_register=None,
+               setpoint_rpm=None, ts=None):
+        """Cập nhật một mẫu telemetry, trả về observation đầy đủ 10 feature.
+
+        setpoint_rpm chỉ dùng khi người gọi đã tự quy đổi (phát lại log đã có
+        sẵn cột này); đường chạy thật truyền cmd_register.
+        """
         ts = time.monotonic() if ts is None else float(ts)
-        dt = self.default_dt if self.prev_ts is None else max(ts - self.prev_ts, 1e-3)
-        self.prev_ts = ts
 
         speed = float(speed_rpm)
         voltage = float(voltage_v)
         current = float(current_a)
-        setpoint = float(setpoint_rpm)
+        setpoint = (float(setpoint_rpm) if setpoint_rpm is not None
+                    else self.setpoint_from(voltage, cmd_register))
 
-        # --- sai số bám và tích phân rò (leaky) ---
-        tracking_error = setpoint - speed
-        decay = math.exp(-dt / self.tau_integral) if self.tau_integral > 0 else 0.0
-        self.error_integral = max(
-            -self.clamp_integral,
-            min(self.clamp_integral,
-                self.error_integral * decay + tracking_error * dt))
-
-        # --- gia tốc ---
-        accel = 0.0 if self.prev_speed is None else (speed - self.prev_speed) / dt
-        self.prev_speed = speed
-
-        # --- mô-men ước lượng từ dòng ---
-        torque = self.kt * max(current - self.i_no_load, 0.0)
-
-        # --- công suất điện / cơ / hiệu suất ---
-        power = voltage * current
-        mech_power = torque * speed * RPM_TO_RAD_S
-        efficiency = max(0.0, min(1.0, mech_power / max(power, _EPS_POWER_W)))
-
-        # --- ước lượng nhiệt I^2R (không có cảm biến thật) ---
-        # Hằng số thời gian nhiệt R_th*C_th = 450 s, nên nếu khởi tạo ở nhiệt độ
-        # môi trường thì mất ~15 phút sau khi bật máy giá trị mới hội tụ. Suốt
-        # quãng đó temp_c thấp hơn phân phối lúc train vài sigma và tự sinh ra
-        # bất thường giả. Mẫu đầu tiên vì vậy khởi tạo thẳng ở điểm cân bằng
-        # ứng với dòng đang đo được.
-        p_heat = current * current * self.r_winding
-        if self.n_samples == 0:
-            self.temp_c = self.ambient_temp_c + p_heat * self.r_thermal
+        # --- bộ lọc dòng: trung bình + độ lệch chuẩn trên cửa sổ trailing ---
+        # Đẩy mẫu vào TRƯỚC khi tính: cửa sổ trailing bao gồm cả mẫu hiện tại,
+        # đúng thứ một bộ lọc nhân quả nhìn thấy ở runtime.
+        # Bỏ mẫu đã đủ 15 giây tuổi (so sánh >=) để ở nhịp 1 Hz cửa sổ giữ đúng
+        # 15 mẫu như deque(maxlen=15) lúc train.
+        self.current_hist.append((ts, current))
+        while self.current_hist and ts - self.current_hist[0][0] >= self.current_window_s:
+            self.current_hist.popleft()
+        window = [c for _, c in self.current_hist]
+        current_lp = sum(window) / len(window)
+        if len(window) >= 2:
+            var = sum((c - current_lp) ** 2 for c in window) / (len(window) - 1)
+            current_ripple = math.sqrt(var)
         else:
-            p_cool = (self.temp_c - self.ambient_temp_c) / self.r_thermal
-            self.temp_c += dt * (p_heat - p_cool) / self.c_thermal
+            current_ripple = 0.0
+
+        # --- gia tốc trên đúng nhịp lấy mẫu lúc train ---
+        # Lấy hiệu tốc độ qua 1 giây chứ không qua một chu kỳ đọc: chia hiệu
+        # của 0,5 giây cho 0,5 vẫn ra rpm/s nhưng nhiễu lượng tử gấp đôi, và
+        # model đã học phân phối của nhịp 1 giây.
+        self.speed_hist.append((ts, speed))
+        while (len(self.speed_hist) >= 2
+               and ts - self.speed_hist[1][0] >= self.sample_period_s):
+            self.speed_hist.popleft()
+        t0, speed0 = self.speed_hist[0]
+        accel = (speed - speed0) / (ts - t0) if ts > t0 else 0.0
+
+        # --- tỉ số rpm/V: chỉ báo sức khoẻ cơ khí ---
+        # Sụt tỉ số này ở cùng một mức lệnh chính là dấu hiệu kẹt cơ khí, quá
+        # tải dây đai hay mòn chổi than.
+        if voltage > MIN_VOLTAGE_FOR_RATIO_V:
+            speed_per_volt = speed / voltage
+        else:
+            speed_per_volt = 0.0     # mất điện áp là trạng thái thật, không phải thiếu dữ liệu
 
         self.n_samples += 1
 
         return {
             "setpoint_rpm": setpoint,
             "speed_rpm": speed,
-            "tracking_error_rpm": tracking_error,
-            "current_a": current,
-            "temp_c": self.temp_c,
             "voltage_v": voltage,
-            "load_torque_est_nm": torque,
-            "power_w": power,
-            "mech_power_w": mech_power,
-            "efficiency_est": efficiency,
+            "current_a": current,
+            "current_lp15_a": current_lp,
+            "tracking_error_rpm": setpoint - speed,
             "accel_rpm_s": accel,
-            "tracking_error_integral_rpm_s": self.error_integral,
+            "power_w": voltage * current,
+            "speed_per_volt_rpm_v": speed_per_volt,
+            "current_ripple_a": current_ripple,
         }
 
 
@@ -165,6 +197,7 @@ class IHCSAdvisor:
         self.error = None
         self.artifact_version = None
         self.system_parameters = {}
+        self.command_calibration = {}
         self._engine = None
         self._loader = None
 
@@ -185,6 +218,11 @@ class IHCSAdvisor:
                     "preprocessing/system_parameters.json")
             except FileNotFoundError:
                 self.system_parameters = {}
+            try:
+                self.command_calibration = loader.load_json(
+                    "preprocessing/command_calibration.json")
+            except FileNotFoundError:
+                self.command_calibration = {}
         except Exception as e:
             self.mode = "unavailable"
             self.error = f"{type(e).__name__}: {e}"
@@ -215,14 +253,30 @@ class IHCSAdvisor:
             self.error = f"{type(e).__name__}: {e}"
             return False
 
-    def run(self, observation):
+    def observe(self, observation, ts=None):
+        """Nạp một mẫu vào cửa sổ của model dự báo bước kế tiếp.
+
+        Gọi MỖI chu kỳ đọc phần cứng. Model nhận 49 bước liên tiếp rồi đoán
+        bước thứ 50, nên nó cần lịch sử thật — không có cửa sổ thì không có
+        điểm bất thường. Engine tự bỏ mẫu đến dày hơn nhịp lấy mẫu lúc train.
+        """
+        if self._engine is None:
+            return False
+        return self._engine.observe(observation, ts=ts)
+
+    def reset_window(self):
+        """Xoá cửa sổ đang dở — gọi khi luồng dữ liệu đầu vào bị đứt."""
+        if self._engine is not None:
+            self._engine.reset_window()
+
+    def run(self, observation, ts=None):
         """Chạy một chu kỳ advisory. Trả về advisory JSON (dict)."""
         if self._engine is None:
             raise RuntimeError("advisor chưa nạp được artifact")
-        return self._engine.run_advisory(observation)
+        return self._engine.run_advisory(observation, ts=ts)
 
     def make_observation_builder(self):
-        return ObservationBuilder(self.system_parameters)
+        return ObservationBuilder(self.system_parameters, self.command_calibration)
 
 
 class _AnomalyOnlyEngine:
@@ -241,7 +295,10 @@ class _AnomalyOnlyEngine:
         self._mean = None
         self._scale = None
         self._thresholds = {}
-        self._window_size = 50
+        self._window_size = 49
+        self._sample_period_s = DEFAULT_SAMPLE_PERIOD_S
+        self._window = deque()
+        self._last_admit_ts = None
         self._session = None
 
     def load(self):
@@ -264,29 +321,66 @@ class _AnomalyOnlyEngine:
             self._thresholds = {}
         try:
             self._window_size = int(self._loader.load_json(
-                "lstm_anomaly/window_config.json").get("window_size", 50))
+                "lstm_anomaly/window_config.json").get("window_size", 49))
         except FileNotFoundError:
             pass
+        try:
+            period_ms = self._loader.load_json(
+                "preprocessing/system_parameters.json").get(
+                    "sampling", {}).get("resample_period_ms")
+            if period_ms:
+                self._sample_period_s = float(period_ms) / 1000.0
+        except FileNotFoundError:
+            pass
+
+        # window_size là số bước ĐẦU VÀO; thêm một ô nữa giữ mẫu thật để chấm
+        # điểm dự báo.
+        self._window = deque(maxlen=self._window_size + 1)
 
         import onnxruntime as ort
         self._session = ort.InferenceSession(
             self._loader.model_path("lstm_anomaly/model.onnx"))
 
-    def run_advisory(self, observation):
-        from datetime import datetime, timezone
+    @property
+    def warmup_remaining(self):
+        return max(0, self._window_size + 1 - len(self._window))
+
+    def reset_window(self):
+        self._window.clear()
+        self._last_admit_ts = None
+
+    def observe(self, observation, ts=None):
+        ts = time.monotonic() if ts is None else float(ts)
+        if (self._last_admit_ts is not None
+                and (ts - self._last_admit_ts) < self._sample_period_s * 0.98):
+            return False
 
         raw = np.array([float(observation.get(f, 0.0)) for f in self._features],
                        dtype=np.float32)
-        scaled = (raw - self._mean) / self._scale
-        window = np.tile(scaled, (self._window_size, 1)).reshape(
-            1, self._window_size, len(self._features)).astype(np.float32)
+        if not np.all(np.isfinite(raw)):
+            return False
 
-        try:
-            out = self._session.run(
-                None, {self._session.get_inputs()[0].name: window})
-            anomaly_score = float(np.mean((window - out[0]) ** 2))
-        except Exception:
-            anomaly_score = None
+        self._last_admit_ts = ts
+        self._window.append((raw - self._mean) / self._scale)
+        return True
+
+    def run_advisory(self, observation, ts=None):
+        from datetime import datetime, timezone
+
+        self.observe(observation, ts=ts)
+
+        anomaly_score = None
+        if len(self._window) > self._window_size:
+            window = np.stack(list(self._window))
+            inputs = window[:-1][None, :, :].astype(np.float32)
+            target = window[-1]
+            try:
+                out = self._session.run(
+                    None, {self._session.get_inputs()[0].name: inputs})
+                pred = np.asarray(out[0], dtype=np.float32).reshape(-1)
+                anomaly_score = float(np.mean((pred - target) ** 2))
+            except Exception:
+                anomaly_score = None
 
         warning = self._thresholds.get("warning_threshold")
         critical = self._thresholds.get("critical_threshold")
@@ -300,10 +394,7 @@ class _AnomalyOnlyEngine:
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "mode": "advisory_only",
             "system_id": "ihcs_servo_conveyor",
-            "current_state": {k: observation.get(k) for k in [
-                "setpoint_rpm", "speed_rpm", "tracking_error_rpm",
-                "current_a", "temp_c", "voltage_v", "load_torque_est_nm",
-            ]},
+            "current_state": {k: observation.get(k) for k in CURRENT_STATE_KEYS},
             "recommendation": {
                 "type": "pid_setpoint_recommendation",
                 "recommended_delta_setpoint_rpm": None,
@@ -317,6 +408,8 @@ class _AnomalyOnlyEngine:
                 "lstm_anomaly_score": (round(anomaly_score, 6)
                                        if anomaly_score is not None else None),
                 "anomaly_threshold": warning,
+                "anomaly_critical_threshold": critical,
+                "anomaly_warmup_remaining": self.warmup_remaining,
             },
             "safety": {
                 "safety_envelope": "blocked",
@@ -334,12 +427,12 @@ class _AnomalyOnlyEngine:
 # HIỂN THỊ
 # ==========================================================================
 def anomaly_level(advisory):
-    """'normal' | 'warning' | 'critical' | 'unknown' theo ngưỡng của artifact."""
+    """'normal' | 'warning' | 'critical' | 'warmup' | 'unknown' theo ngưỡng artifact."""
     ev = advisory.get("model_evidence", {})
     score = ev.get("lstm_anomaly_score")
     warning = ev.get("anomaly_threshold")
     if score is None:
-        return "unknown"
+        return "warmup" if ev.get("anomaly_warmup_remaining") else "unknown"
     envelope = advisory.get("safety", {}).get("safety_envelope")
     reason = (advisory.get("recommendation", {}).get("block_reason") or "")
     if envelope == "blocked" and reason.startswith("anomaly_score"):
@@ -349,7 +442,7 @@ def anomaly_level(advisory):
     return "normal"
 
 
-def format_advisory(advisory, speed_max=600, min_delta_rpm=1.0):
+def format_advisory(advisory, speed_max=980, min_delta_rpm=1.0):
     """Đổi advisory JSON thành thứ HMI hiển thị được.
 
     Trả về dict:
@@ -364,9 +457,15 @@ def format_advisory(advisory, speed_max=600, min_delta_rpm=1.0):
 
     score = ev.get("lstm_anomaly_score")
     warn = ev.get("anomaly_threshold")
-    score_txt = ("bất thường %.4f / ngưỡng %.4f" % (score, warn)
-                 if score is not None and warn is not None
-                 else "bất thường: không có dữ liệu")
+    warmup = ev.get("anomaly_warmup_remaining") or 0
+    if score is not None and warn is not None:
+        score_txt = "bất thường %.4f / ngưỡng %.4f" % (score, warn)
+    elif level == "warmup":
+        # Model dự báo bước kế tiếp cần 50 mẫu liên tiếp @1 Hz mới chấm điểm
+        # được. Nói rõ còn bao nhiêu thay vì báo "không có dữ liệu".
+        score_txt = "đang thu thập cửa sổ dữ liệu (còn %d mẫu)" % warmup
+    else:
+        score_txt = "bất thường: không có dữ liệu"
 
     block_reason = rec.get("block_reason")
     if block_reason:
@@ -396,7 +495,8 @@ def format_advisory(advisory, speed_max=600, min_delta_rpm=1.0):
     detail = f"{score_txt}   •   {conf_txt}   •   MPC: {solver}"
 
     if abs(delta) < min_delta_rpm:
-        warn_txt = "" if level == "normal" else "  (đang có dấu hiệu bất thường)"
+        warn_txt = {"normal": "", "warmup": "  (AI còn đang thu thập dữ liệu)"}.get(
+            level, "  (đang có dấu hiệu bất thường)")
         return {"state": "normal",
                 "text": f"Hệ thống đang chạy đúng vùng tối ưu — giữ nguyên "
                         f"setpoint {speed}.{warn_txt}",
@@ -404,7 +504,7 @@ def format_advisory(advisory, speed_max=600, min_delta_rpm=1.0):
 
     huong = "tăng" if delta > 0 else "giảm"
     text = (f"Đề xuất {huong} setpoint về {speed} (Δ {delta:+.1f}) "
-            f"để bám tốc độ mục tiêu mà vẫn giữ dòng và nhiệt trong giới hạn.")
+            f"để bám tốc độ mục tiêu mà vẫn giữ dòng điện trong giới hạn.")
     return {"state": "suggest", "text": text, "detail": detail, "speed": speed}
 
 
@@ -425,8 +525,6 @@ __all__ = ["ObservationBuilder", "IHCSAdvisor", "format_advisory",
 
 if __name__ == "__main__":
     # Chạy thử nhanh: python3 services/ihcs_bridge.py [artifact_dir]
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     advisor = IHCSAdvisor(sys.argv[1] if len(sys.argv) > 1 else find_artifact_dir())
     ok = advisor.load()
     print(f"artifact : {advisor.artifact_dir}")
@@ -435,7 +533,13 @@ if __name__ == "__main__":
         print(f"ghi chú  : {advisor.error}")
     if not ok:
         sys.exit(1)
+
+    # Model cần 50 mẫu liên tiếp @1 Hz mới chấm điểm được, nên phải mồi cửa sổ
+    # trước khi chạy advisory — điểm vận hành lấy theo rig thật (thanh ghi lệnh
+    # 3854 ~ 971 rpm ở rail 24,8 V).
     builder = advisor.make_observation_builder()
-    obs = builder.update(speed_rpm=651.0, voltage_v=11.596,
-                         current_a=0.147, setpoint_rpm=660.0)
-    print(json.dumps(advisor.run(obs), indent=2, ensure_ascii=False))
+    for i in range(60):
+        obs = builder.update(speed_rpm=971.0, voltage_v=24.8, current_a=0.046,
+                             cmd_register=3854, ts=float(i))
+        advisor.observe(obs, ts=float(i))
+    print(json.dumps(advisor.run(obs, ts=60.0), indent=2, ensure_ascii=False))

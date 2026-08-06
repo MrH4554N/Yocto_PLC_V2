@@ -38,8 +38,9 @@ PLC_TIMEOUT = 1
 ADDR_D120_SPEED = 120
 ADDR_D8116_CMD = 8116
 
-RAW_GAIN = 4.087
-RAW_OFFSET = 1402
+# Biên giá trị thô ghi vào D8116. Hệ số quy đổi rpm <-> raw KHÔNG còn tuyến
+# tính: thanh ghi này điều khiển điện áp và bão hoà ở rail nguồn, nên phép quy
+# đổi dùng bảng đo trong artifact (command_map.py + command_calibration.json).
 RAW_MIN = 2000
 RAW_MAX = 4000
 
@@ -62,4 +63,8 @@ AI_EVERY_N = 10
 TREND_POINTS = 240
 
 # --- Giới hạn vận hành ---
-SPEED_MAX = 600
+# Rig đo được plateau ở ~982 rpm khi thanh ghi lệnh bão hoà (24,8 V), và bảng
+# hiệu chuẩn chỉ có dữ liệu tới 979 rpm. Giới hạn cũ 600 rpm là của bộ dữ liệu
+# trước: giữ nó thì mọi đề xuất của AI (envelope cho phép tới 1000 rpm) đều bị
+# cắt cụt ở 600.
+SPEED_MAX = 980

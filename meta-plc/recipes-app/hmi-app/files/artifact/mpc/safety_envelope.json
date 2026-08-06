@@ -1,5 +1,6 @@
 {
-  "_comment": "Runtime clipping/blocking envelope applied AFTER the MPC solution as defense-in-depth (2026-07-28). Bounds match the rig's rated speed of 660 RPM and the 50 RPM/tick rate limit.",
+  "_comment": "Runtime clipping/blocking envelope applied AFTER the MPC solution as defense-in-depth (2026-08-05). Bounds are in RPM because this envelope guards the OPERATOR-FACING recommendation, which inference_engine.py converts from volts using rpm_per_volt = 39.2742.",
+  "_bounds_derivation": "max_setpoint_rpm raised 660 -> 1000. The 660 figure came from the previous acquisition file; ai_training_data4.csv shows the rig plateaus at ~982 RPM with a 1082 RPM transient peak, so a 660 ceiling clipped every legitimate recommendation at full command. delta bounds stay +/-50 RPM, matching the 1.273 V/tick input rate limit.",
   "mode": "advisory_only",
   "action_bounds": {
     "min_delta_setpoint_rpm": -50.0,
@@ -7,6 +8,6 @@
   },
   "setpoint_bounds": {
     "min_setpoint_rpm": 0.0,
-    "max_setpoint_rpm": 660.0
+    "max_setpoint_rpm": 1000.0
   }
 }

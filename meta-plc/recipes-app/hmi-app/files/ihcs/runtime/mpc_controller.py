@@ -5,9 +5,18 @@ Implements the contract in ``shared/contracts/mpc_contract.md``:
 * Discrete-time LTI plant ``x_{k+1} = A x_k + B u_k`` (in deviation form,
   centred on the operating-point pair ``(x_eq, u_eq)`` produced by M1).
 * Quadratic stage cost
-  ``(y_k − r)^T Q (y_k − r) + Δu_k^T R Δu_k + ρ_I ε_I,k^2 + ρ_T ε_T,k^2``.
-* Hard input + rate bounds, soft upper bounds on current and temperature.
+  ``(y_k − r)^T Q (y_k − r) + Δu_k^T R Δu_k + ρ_I ε_I,k^2``.
+* Hard input + rate bounds, soft upper bound on the filtered current.
 * osqp 1.x as the QP solver, with warm-start across consecutive calls.
+
+The plant identified on the bench rig (2026-08-05) has **two** states,
+``[speed_rpm, current_lp15_a]``, and its manipulated variable is the motor
+**voltage**, not a speed setpoint: the rig is open loop and the PLC command
+register drives voltage. ``u_min``/``u_max``/``du_*`` in constraints.json are
+therefore volts, and the caller passes/receives volts. There is no thermal
+state on this hardware, so the temperature slack (``ρ_T``, ``T_max``) that the
+previous 3-state model carried is gone — nothing measures temperature and
+nothing can be predicted about it.
 
 The QP is constructed once at startup (sparse matrices fixed for the lifetime
 of the controller) and only the right-hand-side vectors ``q``, ``l``, ``u``
@@ -32,12 +41,11 @@ import scipy.sparse as sp
 # Match mpc_contract.md state ordering — the identifier saves these names in
 # the .npz metadata; we re-check at load time so a model with reordered states
 # triggers a clear error rather than a silent wrong-axis bug.
-EXPECTED_STATE_NAMES = ["speed_rpm", "current_a", "temp_c"]
-EXPECTED_INPUT_NAMES = ["setpoint_rpm"]
+EXPECTED_STATE_NAMES = ["speed_rpm", "current_lp15_a"]
+EXPECTED_INPUT_NAMES = ["voltage_v"]
 
-# Index of the constrained states within the 3-state vector.
+# Index of the constrained state within the 2-state vector.
 IDX_CURRENT = 1
-IDX_TEMP = 2
 
 # Map of osqp 1.x status strings to a single advisory ``block_reason`` token.
 _BLOCK_REASON_MAP = {
@@ -136,7 +144,6 @@ class MPCController:
         self.Q = np.asarray(cfg["Q"], dtype=np.float64)
         self.R = np.asarray(cfg["R"], dtype=np.float64)
         self.rho_I = float(cfg["rho_I"])
-        self.rho_T = float(cfg["rho_T"])
 
     def _load_constraints(self) -> None:
         cfg = self._load_json(self.constraints_path, "constraints")
@@ -149,13 +156,13 @@ class MPCController:
                 return float(default)
             return float(val)
 
-        # Defaults are chosen to match Phase 1 PPO bounds where reasonable.
+        # Defaults match the bench rig: u is the motor voltage, bounded by the
+        # 24.8 V supply rail, and I_max is the soft limit on current_lp15_a.
         self.u_min = _f("u_min", 0.0)
-        self.u_max = _f("u_max", 3000.0)
-        self.du_min = _f("du_min", -200.0)
-        self.du_max = _f("du_max", 200.0)
-        self.I_max = _f("I_max", 10.0)
-        self.T_max = _f("T_max", 80.0)
+        self.u_max = _f("u_max", 24.8)
+        self.du_min = _f("du_min", -1.273)
+        self.du_max = _f("du_max", 1.273)
+        self.I_max = _f("I_max", 0.1)
 
     def _load_horizon(self) -> None:
         cfg = self._load_json(self.horizon_path, "horizon_config")
@@ -196,10 +203,9 @@ class MPCController:
         self.n_x = n_x
         self.n_u = n_u
         self.n_y = self.C.shape[0]
-        if n_x < max(IDX_CURRENT, IDX_TEMP) + 1:
+        if n_x < IDX_CURRENT + 1:
             raise MPCSetupError(
-                f"plant has {n_x} states; need indices "
-                f"{IDX_CURRENT} (current) and {IDX_TEMP} (temperature)"
+                f"plant has {n_x} states; need index {IDX_CURRENT} (current)"
             )
 
     # --------------------------------------------------------------- QP build
@@ -210,14 +216,12 @@ class MPCController:
         nv_x = nx * N
         nv_u = nu * N
         nv_eI = N
-        nv_eT = N
-        nv = nv_x + nv_u + nv_eI + nv_eT
+        nv = nv_x + nv_u + nv_eI
         self._nv = nv
         self._slices = {
             "x": slice(0, nv_x),
             "u": slice(nv_x, nv_x + nv_u),
-            "eI": slice(nv_x + nv_u, nv_x + nv_u + nv_eI),
-            "eT": slice(nv_x + nv_u + nv_eI, nv),
+            "eI": slice(nv_x + nv_u, nv),
         }
 
         # ----------------- Hessian H (z^T H z) and quadratic block P = 2H -----------------
@@ -245,12 +249,10 @@ class MPCController:
             H[ik:ik + nu, ikp1:ikp1 + nu] -= self.R
             H[ikp1:ikp1 + nu, ik:ik + nu] -= self.R
 
-        # Slack penalties (diagonal)
+        # Slack penalty (diagonal)
         eI_base = nv_x + nv_u
-        eT_base = eI_base + nv_eI
         for k in range(N):
             H[eI_base + k, eI_base + k] += self.rho_I
-            H[eT_base + k, eT_base + k] += self.rho_T
 
         # OSQP wants (1/2) z^T P z + q^T z → P = 2H
         self._P = sp.csc_matrix(2.0 * H)
@@ -306,36 +308,22 @@ class MPCController:
                 l_list.append(np.array([self.du_min]))
                 u_list.append(np.array([self.du_max]))
 
-        # ----- (4) Soft state upper bounds with slack -----
-        # δx_k[idx] - ε ≤ X_max - x_eq[idx]  →  l = -∞, u = X_max - x_eq[idx]
+        # ----- (4) Soft current upper bound with slack -----
+        # δx_k[idx] - ε ≤ I_max - x_eq[idx]  →  l = -∞, u = I_max - x_eq[idx]
         I_max_dev = self.I_max - self.x_eq[IDX_CURRENT]
-        T_max_dev = self.T_max - self.x_eq[IDX_TEMP]
         for k in range(N):
             ik1 = k * nx
-            # Current row
             row = sp.lil_matrix((1, nv), dtype=np.float64)
             row[0, ik1 + IDX_CURRENT] = 1.0
             row[0, eI_base + k] = -1.0
             rows.append(row.tocoo())
             l_list.append(np.array([-np.inf]))
             u_list.append(np.array([I_max_dev]))
-            # Temp row
-            row = sp.lil_matrix((1, nv), dtype=np.float64)
-            row[0, ik1 + IDX_TEMP] = 1.0
-            row[0, eT_base + k] = -1.0
-            rows.append(row.tocoo())
-            l_list.append(np.array([-np.inf]))
-            u_list.append(np.array([T_max_dev]))
 
         # ----- (5) Slack non-negativity: ε ≥ 0 -----
         for k in range(N):
             row = sp.lil_matrix((1, nv), dtype=np.float64)
             row[0, eI_base + k] = 1.0
-            rows.append(row.tocoo())
-            l_list.append(np.array([0.0]))
-            u_list.append(np.array([np.inf]))
-            row = sp.lil_matrix((1, nv), dtype=np.float64)
-            row[0, eT_base + k] = 1.0
             rows.append(row.tocoo())
             l_list.append(np.array([0.0]))
             u_list.append(np.array([np.inf]))
@@ -366,11 +354,11 @@ class MPCController:
         Parameters
         ----------
         x0:
-            Current state, shape ``(n_x,)``, in **absolute** units.
+            Current state ``[speed_rpm, current_lp15_a]``, in **absolute** units.
         r:
             Desired output (``speed_rpm``).
         u_prev:
-            Previous applied input (``setpoint_rpm``), absolute units.
+            Previous applied input (``voltage_v``), absolute units.
         """
         x0 = np.asarray(x0, dtype=np.float64).flatten()
         if x0.shape != (self.n_x,):
@@ -422,18 +410,15 @@ class MPCController:
                 "iterations": int(result.info.iter),
                 "solve_ms": wall_ms,
                 "slack_violation_current_a": None,
-                "slack_violation_temp_c": None,
             }
 
         z = np.asarray(result.x, dtype=np.float64).flatten()
         delta_u_first = float(z[u_base])               # δu_0
-        u_next_absolute = self.u_eq[0] + delta_u_first  # absolute setpoint command
+        u_next_absolute = self.u_eq[0] + delta_u_first  # absolute command voltage
 
         # Slack violation at k=0 (most relevant for the next tick)
         eI_base = self._slices["eI"].start
-        eT_base = self._slices["eT"].start
         slack_I = float(z[eI_base])
-        slack_T = float(z[eT_base])
 
         return {
             "status": status,
@@ -443,7 +428,6 @@ class MPCController:
             "iterations": int(result.info.iter),
             "solve_ms": wall_ms,
             "slack_violation_current_a": slack_I,
-            "slack_violation_temp_c": slack_T,
         }
 
 

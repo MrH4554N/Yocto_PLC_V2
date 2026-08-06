@@ -3,7 +3,7 @@
 """Vòng đời của trợ lý AI trong app.
 
 Tách khỏi ihcs_bridge để phân vai rõ ràng:
-  • ihcs_bridge — thuần logic: telemetry -> 12 feature -> advisory -> chuỗi
+  • ihcs_bridge — thuần logic: telemetry -> 10 feature -> advisory -> chuỗi
     hiển thị. Không biết gì về Qt, test được độc lập.
   • ai_service  — quản lý trạng thái theo thời gian cho app: nạp artifact một
     lần, nhận mẫu mỗi chu kỳ đọc, chạy suy luận mỗi chu kỳ AI, nuốt lỗi để
@@ -56,37 +56,60 @@ class AIService:
             self._builder = self._advisor.make_observation_builder()
         return self.ready
 
-    def feed(self, speed_rpm, voltage_v, current_a, setpoint_rpm, ts=None):
+    @property
+    def warmup_remaining(self):
+        """Số mẫu còn thiếu trước khi chấm được điểm bất thường."""
+        engine = getattr(self._advisor, "_engine", None)
+        return getattr(engine, "warmup_remaining", 0)
+
+    def reset_window(self):
+        """Bỏ cửa sổ đang dở (mất dữ liệu đầu vào) và bắt đầu thu thập lại."""
+        if self.ready:
+            self._advisor.reset_window()
+            if self._builder is not None:
+                self._builder.reset()
+        self._last_obs = None
+
+    def feed(self, speed_rpm, voltage_v, current_a, cmd_register=None, ts=None):
         """Nạp một mẫu telemetry. Gọi MỖI chu kỳ đọc, không phải mỗi chu kỳ AI.
 
-        Nhiệt độ ước lượng và tích phân sai số là hệ động học theo thời gian —
-        bỏ mẫu sẽ làm lệch giá trị đưa vào model.
+        Hai lý do phải gọi mỗi chu kỳ: bộ lọc dòng 15 giây là hệ động học theo
+        thời gian (bỏ mẫu là lệch giá trị), và model dự báo bước kế tiếp cần
+        một cửa sổ 50 mẫu LIÊN TIẾP mới chấm điểm được.
+
+        cmd_register: giá trị thô của thanh ghi lệnh D8116. Thiếu nó thì
+        ObservationBuilder chạy chế độ suy giảm (suy điểm làm việc từ điện áp)
+        — vẫn phát hiện lỗi cơ khí, nhưng không còn phát hiện lỗi bám lệnh.
 
         ts: mốc thời gian của mẫu (giây). Để None thì lấy đồng hồ hệ thống —
         đúng cho app chạy thật; truyền tay khi phát lại log hoặc chạy mô phỏng
-        nhanh hơn thời gian thực, nếu không dt sẽ sai và mô hình nhiệt lệch.
+        nhanh hơn thời gian thực, nếu không dt sẽ sai và bộ lọc dòng lệch.
         """
         if not self.ready or self._builder is None:
             return None
         try:
             self._last_obs = self._builder.update(
                 speed_rpm=speed_rpm, voltage_v=voltage_v,
-                current_a=current_a, setpoint_rpm=setpoint_rpm, ts=ts)
+                current_a=current_a, cmd_register=cmd_register, ts=ts)
+            self._advisor.observe(self._last_obs, ts=ts)
         except Exception as e:
             self.error = f"lỗi dựng feature: {e}"
             self._last_obs = None
         return self._last_obs
 
-    def advise(self):
+    def advise(self, ts=None):
         """Chạy một chu kỳ suy luận trên mẫu mới nhất.
 
         Trả về (advisory, view) — advisory là JSON đầy đủ để log/MQTT, view là
         dict đã format sẵn cho giao diện. Trả None nếu chưa có dữ liệu hoặc lỗi.
+
+        ts: truyền cùng mốc thời gian đã dùng cho feed() khi phát lại log; để
+        None thì cả hai cùng lấy đồng hồ hệ thống.
         """
         if not self.ready or self._last_obs is None:
             return None
         try:
-            advisory = self._advisor.run(self._last_obs)
+            advisory = self._advisor.run(self._last_obs, ts=ts)
         except Exception as e:
             self.error = f"lỗi suy luận: {e}"
             return None

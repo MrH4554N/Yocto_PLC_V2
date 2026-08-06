@@ -15,7 +15,7 @@ from ui.widgets import StatCard
 class ControlPage(QWidget):
     write_requested = pyqtSignal(int)   # tốc độ mục tiêu
 
-    PRESETS = [0, 150, 300, 450, 600]
+    PRESETS = [0, 200, 400, 600, 800, 950]
 
     def __init__(self, parent=None):
         super().__init__(parent)

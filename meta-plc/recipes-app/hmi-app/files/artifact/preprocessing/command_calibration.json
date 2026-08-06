@@ -1,0 +1,73 @@
+{
+  "_source": "do tu ai_training_data4.csv (27688 mau @1Hz)",
+  "_note": "D8116 dieu khien DIEN AP, bao hoa o rail 24.8V - khong dung cong thuc bac nhat",
+  "rpm_per_volt": 39.2742,
+  "saturation_knee_register": 3314,
+  "anchors": [
+    {
+      "register": 2906,
+      "speed_rpm": 191.0,
+      "voltage_v": 5.233
+    },
+    {
+      "register": 2926,
+      "speed_rpm": 296.7,
+      "voltage_v": 7.883
+    },
+    {
+      "register": 3000,
+      "speed_rpm": 327.5,
+      "voltage_v": 8.648
+    },
+    {
+      "register": 3102,
+      "speed_rpm": 536.6,
+      "voltage_v": 13.892
+    },
+    {
+      "register": 3204,
+      "speed_rpm": 809.0,
+      "voltage_v": 20.63
+    },
+    {
+      "register": 3314,
+      "speed_rpm": 979.2,
+      "voltage_v": 24.687
+    },
+    {
+      "register": 3400,
+      "speed_rpm": 982.7,
+      "voltage_v": 24.762
+    },
+    {
+      "register": 3506,
+      "speed_rpm": 981.3,
+      "voltage_v": 24.364
+    },
+    {
+      "register": 3510,
+      "speed_rpm": 984.2,
+      "voltage_v": 24.787
+    },
+    {
+      "register": 3604,
+      "speed_rpm": 985.1,
+      "voltage_v": 24.798
+    },
+    {
+      "register": 3694,
+      "speed_rpm": 982.1,
+      "voltage_v": 24.791
+    },
+    {
+      "register": 3711,
+      "speed_rpm": 988.6,
+      "voltage_v": 24.8
+    },
+    {
+      "register": 3854,
+      "speed_rpm": 971.1,
+      "voltage_v": 24.785
+    }
+  ]
+}

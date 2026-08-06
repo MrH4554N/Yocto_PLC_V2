@@ -18,7 +18,7 @@ from PyQt5.QtCore import QThread, pyqtSignal
 from config import AI_EVERY_N, POLL_INTERVAL
 from core.ina_sensor import INASensor
 from core.mqtt_publisher import MqttPublisher
-from core.plc_driver import PLCDriver, speed_to_raw
+from core.plc_driver import PLCDriver, raw_to_speed, speed_to_raw
 from services.ai_service import AIService
 
 
@@ -36,10 +36,10 @@ class DataWorker(QThread):
         self.is_running = True
         self.ai_counter = 0
 
-        # Setpoint hiện hành — AI cần con số này để tính sai số bám. Giá trị
-        # thật được đọc lại từ PLC ở đầu run(); trước đó tạm để 0.
-        self.setpoint_rpm = 0.0
-        self.setpoint_known = False
+        # Thanh ghi lệnh hiện hành (giá trị THÔ của D8116). AI tự tra bảng hiệu
+        # chuẩn ra điểm làm việc, nên ở đây chỉ chuyển tiếp con số thô. None =
+        # chưa đọc được: AI sẽ chạy chế độ suy giảm (suy từ điện áp).
+        self.cmd_register = None
 
         self.plc = PLCDriver()
         self.ina = INASensor()
@@ -67,15 +67,16 @@ class DataWorker(QThread):
                 "AI chạy chế độ rút gọn: chỉ cảnh báo bất thường, "
                 "không đề xuất setpoint.")
 
-        # Lấy setpoint PLC đang giữ để AI không hiểu nhầm là sai số bám lớn.
-        # Không đọc được thì để vòng lặp suy ra từ tốc độ đo được — tuyệt đối
-        # không để 0, vì setpoint 0 trong khi băng tải đang chạy 500 rpm cho
-        # sai số bám -500 và AI sẽ chặn mọi thứ vì "bất thường".
-        setpoint = self.plc.read_setpoint()
-        if setpoint is not None:
-            self.setpoint_rpm = setpoint
-            self.setpoint_known = True
-            self.status_update.emit(f"Setpoint PLC hiện hành: {setpoint:.0f}")
+        # Lấy lệnh PLC đang giữ để AI không hiểu nhầm là sai số bám lớn.
+        self.cmd_register = self.plc.read_command_register()
+        if self.cmd_register is not None:
+            self.status_update.emit(
+                f"Lệnh PLC hiện hành: D8116 = {self.cmd_register} "
+                f"(~{raw_to_speed(self.cmd_register):.0f} rpm)")
+        else:
+            self.status_update.emit(
+                "Chưa đọc được D8116 — AI chạy chế độ suy giảm: điểm làm việc "
+                "suy từ điện áp, không phát hiện được lỗi bám lệnh.")
 
         self.link_update.emit(dict(self.links))
 
@@ -100,6 +101,14 @@ class DataWorker(QThread):
                     self.link_update.emit(dict(self.links))
                     self.status_update.emit(f"Lỗi PLC: {e}")
 
+            # Đọc lại thanh ghi lệnh mỗi chu kỳ: người khác có thể đổi lệnh
+            # ngoài HMI này, và AI phải so tốc độ đo được với lệnh THẬT sự đang
+            # có. Đọc lỗi thì giữ giá trị cũ chứ không xoá về None — một lần
+            # trượt khung truyền không phải là "mất hiệu chuẩn".
+            latest_cmd = self.plc.read_command_register()
+            if latest_cmd is not None:
+                self.cmd_register = latest_cmd
+
             # --- ĐỌC CẢM BIẾN DÒNG/ÁP ---
             if self.ina.available:
                 voltage, current, power = self.ina.read()
@@ -110,24 +119,20 @@ class DataWorker(QThread):
             self.telemetry_update.emit(telemetry)
             self.mqtt.publish_telemetry(telemetry)
 
-            # Chưa biết setpoint (không đọc được D8116): lấy tốc độ đang chạy
-            # làm mốc, sai số bám ban đầu bằng 0 — nằm trong vùng dữ liệu train.
-            if not self.setpoint_known and self.links["plc"]:
-                self.setpoint_rpm = float(speed)
-                self.setpoint_known = True
-                self.status_update.emit(
-                    f"Không đọc được D8116 — tạm lấy setpoint = tốc độ hiện tại "
-                    f"({speed}). Ghi một lệnh tốc độ để chốt lại.")
-
             # --- NẠP MẪU CHO AI (mỗi chu kỳ) ---
             # Mất PLC hoặc mất cảm biến dòng/áp thì telemetry về 0. Nạp số 0 vào
-            # model là tự chế ra bất thường: 12 feature đều lệch hàng sigma và AI
-            # sẽ chặn liên tục vì lý do không liên quan tới băng tải. Thà dừng AI
-            # và nói rõ đang thiếu dữ liệu.
+            # model là tự chế ra bất thường: cả 10 feature đều lệch hàng sigma và
+            # AI sẽ chặn liên tục vì lý do không liên quan tới băng tải. Thà dừng
+            # AI và nói rõ đang thiếu dữ liệu.
             data_ok = self.links["plc"] and self.ina.available
             if data_ok:
                 self.ai.feed(speed_rpm=speed, voltage_v=voltage,
-                             current_a=current, setpoint_rpm=self.setpoint_rpm)
+                             current_a=current, cmd_register=self.cmd_register)
+            else:
+                # Xoá cửa sổ đang dở: model đọc 49 mẫu như một đoạn LIÊN TỤC,
+                # nối mẫu trước và sau một lần mất kết nối lại với nhau là tự
+                # chế ra một bước nhảy không hề xảy ra trên băng tải.
+                self.ai.reset_window()
 
             # --- CHẠY AI (mỗi AI_EVERY_N chu kỳ ~ 5 s) ---
             self.ai_counter += 1
@@ -182,9 +187,9 @@ class DataWorker(QThread):
             self.status_update.emit(f"Lỗi ghi PLC: {e}")
             return False
 
-        # Setpoint mới có hiệu lực ngay với AI ở chu kỳ kế tiếp.
-        self.setpoint_rpm = float(speed_rpm)
-        self.setpoint_known = True
+        # Lệnh mới có hiệu lực ngay với AI ở chu kỳ kế tiếp (chu kỳ sau sẽ đọc
+        # lại từ PLC để xác nhận).
+        self.cmd_register = raw
         self.mqtt.publish_control(raw, speed_rpm)
         return True
 

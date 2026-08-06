@@ -2,7 +2,7 @@
   "artifact_name": "ihcs_raspi_policy",
   "artifact_version": "0.1.0",
   "target_device": "raspberry_pi",
-  "created_at_utc": "2026-07-28T12:42:44.944721+00:00",
+  "created_at_utc": "2026-08-06T06:36:55.457974+00:00",
   "source_historian": "Phase_1_PC_Training/data/historian/ihcs.sqlite",
   "safety_mode": "advisory_only",
   "control_role": "mpc_recommends_pid_setpoint",
@@ -20,7 +20,7 @@
       "constraints": "mpc/constraints.json",
       "horizon_config": "mpc/horizon_config.json",
       "safety_envelope": "mpc/safety_envelope.json",
-      "purpose": "pid_setpoint_recommendation"
+      "purpose": "command_setpoint_recommendation"
     }
   },
   "preprocessing": {
@@ -28,9 +28,11 @@
     "feature_list": "preprocessing/feature_list.json",
     "observation_config": "preprocessing/observation_config.json",
     "signal_registry": "preprocessing/signal_registry.json",
-    "system_parameters": "preprocessing/system_parameters.json"
+    "system_parameters": "preprocessing/system_parameters.json",
+    "command_calibration": "preprocessing/command_calibration.json"
   },
   "outputs": {
+    "mpc_manipulated_variable": "voltage_v",
     "mpc_output": "recommended_delta_setpoint_rpm",
     "recommended_setpoint": "setpoint_rpm",
     "autonomous_action": false,
