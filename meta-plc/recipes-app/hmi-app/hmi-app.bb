@@ -14,6 +14,8 @@ SRC_URI = " \
     file://ihcs \
     file://artifact \
     file://hmi-app.service \
+    file://mqtt_secrets.example.py \
+    file://mqtt_secrets.py \
 "
 
 inherit systemd useradd
@@ -32,6 +34,10 @@ do_install() {
     install -d ${D}${APP_INSTALL_DIR}
     install -m 0755 ${UNPACKDIR}/hmi_fx_ai.py ${D}${APP_INSTALL_DIR}/
     install -m 0644 ${UNPACKDIR}/config.py ${D}${APP_INSTALL_DIR}/
+
+    install -m 0644 ${UNPACKDIR}/mqtt_secrets.example.py ${D}${APP_INSTALL_DIR}/
+    install -m 0644 ${UNPACKDIR}/mqtt_secrets.py ${D}${APP_INSTALL_DIR}/
+
     cp -r ${UNPACKDIR}/core ${UNPACKDIR}/services ${UNPACKDIR}/ui ${UNPACKDIR}/ihcs \
           ${D}${APP_INSTALL_DIR}/
     # Không đóng gói bytecode sinh ra lúc dev trên máy host

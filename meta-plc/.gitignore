@@ -12,3 +12,5 @@ __pycache__/
 # BUỘC phải có. Thiếu file này thì ArtifactLoader không verify được checksum,
 # trợ lý AI tắt hẳn trên máy — mà build vẫn xanh nên rất khó lần ra.
 !recipes-app/hmi-app/files/artifact/**/*.onnx
+# Ignore sensitive HMI credentials
+recipes-app/hmi-app/files/mqtt_secrets.py

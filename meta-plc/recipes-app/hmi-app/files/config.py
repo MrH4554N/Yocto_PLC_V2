@@ -9,14 +9,21 @@ không phải lục trong code giao diện. Các biến môi trường cùng tê
 
 import os
 
+# --- NẠP CẤU HÌNH BẢO MẬT MQTT ---
+try:
+    from mqtt_secrets import MQTT_CLIENT_ID, MQTT_TOKEN, MQTT_BROKER as SECRETS_BROKER
+except ImportError:
+    print("CẢNH BÁO: Không tìm thấy mqtt_secrets.py! Đang dùng giá trị mặc định.")
+    MQTT_CLIENT_ID = os.environ.get("MQTT_CLIENT_ID", "RPI_HMI_01")
+    MQTT_TOKEN = os.environ.get("MQTT_TOKEN", "")
+    SECRETS_BROKER = "app.coreiot.io"
+
 # --- Ứng dụng ---
 APP_TITLE = "AI PLC HMI"
 APP_VERSION = "3.0"
 
 # --- Đường dẫn cài đặt trên target ---
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-# Artifact IHCS: ưu tiên biến môi trường, rồi tới thư mục cạnh app (chạy trên
-# PC), cuối cùng là đường dẫn chuẩn do recipe cài đặt.
 ARTIFACT_DIR = os.environ.get(
     "IHCS_ARTIFACT_DIR",
     os.path.join(APP_DIR, "artifact")
@@ -28,10 +35,9 @@ PLC_PORT = os.environ.get("PLC_PORT", "/dev/ttyUSB0")
 PLC_BAUDRATE = int(os.environ.get("PLC_BAUDRATE", "9600"))
 PLC_SLAVE = int(os.environ.get("PLC_SLAVE", "1"))
 PLC_TIMEOUT = 1
-ADDR_D120_SPEED = 120     # thanh ghi tốc độ thực tế
-ADDR_D8116_CMD = 8116     # thanh ghi lệnh tốc độ
+ADDR_D120_SPEED = 120
+ADDR_D8116_CMD = 8116
 
-# Hiệu chuẩn quy đổi tốc độ <-> giá trị raw D8116
 RAW_GAIN = 4.087
 RAW_OFFSET = 1402
 RAW_MIN = 2000
@@ -42,20 +48,18 @@ INA_SHUNT_OHMS = 0.1
 INA_ADDRESS = 0x40
 
 # --- MQTT ---
-MQTT_BROKER = os.environ.get("MQTT_BROKER", "192.168.1.100")
+# Ưu tiên biến môi trường, sau đó đến cấu hình bảo mật
+MQTT_BROKER = os.environ.get("MQTT_BROKER", SECRETS_BROKER)
 MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
-MQTT_CLIENT_ID = "RPI_HMI_01"
-MQTT_TOPIC_TELEMETRY = "factory/conveyor/telemetry"
-MQTT_TOPIC_CONTROL = "factory/conveyor/control"
-MQTT_TOPIC_ADVISORY = "factory/conveyor/advisory"
+# Topic chuẩn của nền tảng CoreIOT
+MQTT_TOPIC_TELEMETRY = "v1/devices/me/telemetry"
+MQTT_TOPIC_CONTROL = "v1/devices/me/attributes"
+MQTT_TOPIC_ADVISORY = "v1/devices/me/attributes"
 
 # --- Chu kỳ ---
-POLL_INTERVAL = 0.5       # chu kỳ đọc phần cứng (s)
-AI_EVERY_N = 10           # chạy AI mỗi N chu kỳ đọc (~5 s)
-TREND_POINTS = 240        # số mẫu giữ cho đồ thị (~2 phút)
+POLL_INTERVAL = 0.5
+AI_EVERY_N = 10
+TREND_POINTS = 240
 
 # --- Giới hạn vận hành ---
-# Rig thật quay tối đa 660 rpm (theo system_parameters.json của artifact);
-# HMI giới hạn ở 600 để chừa biên an toàn. Đề xuất của MPC vượt mức này sẽ bị
-# kẹp lại trước khi hiển thị.
 SPEED_MAX = 600
