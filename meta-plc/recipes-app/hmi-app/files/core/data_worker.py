@@ -314,7 +314,8 @@ class DataWorker(QThread):
         where = f"{self.station.id} {self.plc.port}@{self.plc.baudrate} D{self.plc.addr_cmd}"
         try:
             if not self.plc.write_raw(raw):
-                raise IOError("PLC không trả ACK sau 3 lần thử")
+                raise IOError(self.plc.last_error
+                              or "PLC không trả ACK sau 3 lần thử")
         except Exception as e:
             # In ra stdout để journalctl -u hmi-app giữ lại: statusbar bị nhịp
             # AI ghi đè sau 5 giây, mà lỗi ghi là thứ người ta đi tìm lúc 11

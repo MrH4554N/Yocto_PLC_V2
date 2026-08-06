@@ -47,6 +47,7 @@ class PLCDriver:
         self._lock = threading.Lock()
         self.connected = False
         self.ser = None
+        self.last_error = None        # lý do lần ghi hỏng gần nhất
         self.port = port or PLC_PORT
         self.baudrate = int(baudrate or PLC_BAUDRATE)
         self.slave = slave
@@ -116,13 +117,19 @@ class PLCDriver:
         raise IOError("Invalid response from PLC (Computer Link)")
 
     def _write_register(self, reg_index, value):
-        """Hàm ghi thanh ghi theo chuẩn Computer Link từ file demo."""
+        """Ghi một thanh ghi. Trả (thành_công, lý_do).
+
+        Trả kèm lý do chứ không phải mỗi True/False: ba nguyên nhân dưới đây
+        đều làm lệnh ghi hỏng nhưng cách sửa khác hẳn nhau, mà nếu chỉ có
+        False thì người đi sửa không phân biệt được và phải mò từ đầu.
+        """
         if not self.ser or not self.ser.is_open:
-            return False
-            
-        if not (-32768 <= value <= 65535): return False
+            return False, "cổng nối tiếp chưa mở"
+
+        if not (-32768 <= value <= 65535):
+            return False, f"giá trị {value} ngoài dải thanh ghi 16 bit"
         if value < 0: value = (1 << 16) + value
-        
+
         address_hex = f"{self._get_fx_address(reg_index):04X}"
         hex_val = f"{value:04X}"
         swapped = hex_val[2:4] + hex_val[0:2]
@@ -133,9 +140,21 @@ class PLCDriver:
         self.ser.reset_input_buffer()
         self.ser.write(cmd.encode('ascii'))
         self.ser.flush()
-        
+
         res = self.ser.read(1)
-        return res == b'\x06'
+        if res == b'\x06':                     # ACK
+            return True, ""
+        if not res:
+            return False, (f"PLC không trả lời trong {self.ser.timeout}s "
+                           f"(baudrate {self.ser.baudrate} có đúng không? "
+                           f"dây, nguồn PLC?)")
+        if res == b'\x15':                     # NAK
+            return False, ("PLC trả NAK — từ chối lệnh ghi (sai checksum/địa "
+                           f"chỉ D{reg_index}, hoặc PLC đang khoá ghi/không ở RUN)")
+        if res == b'\x02':                     # STX
+            return False, ("nhặt phải khung trả lời của lệnh ĐỌC trước đó "
+                           "— lệch nhịp, thử lại là được")
+        return False, f"byte lạ {res!r}, mong đợi ACK 0x06"
 
     def read_speed(self):
         with self._lock:
@@ -164,10 +183,18 @@ class PLCDriver:
         PLC còn đang bận trả lời khung đọc trước; thử lại là ăn ngay.
         """
         with self._lock:
-            for attempt in range(retries + 1):
-                if self._write_register(self.addr_cmd, raw_command):
+            total = retries + 1
+            for attempt in range(1, total + 1):
+                ok, reason = self._write_register(self.addr_cmd, raw_command)
+                if ok:
+                    if attempt > 1:
+                        print(f"[PLC] ghi được ở lần thử {attempt}/{total} "
+                              f"(lần trước hỏng vì: {self.last_error})", flush=True)
+                    self.last_error = None
                     return True
-                if attempt < retries:
+                self.last_error = reason
+                print(f"[PLC] ghi lần {attempt}/{total} hỏng: {reason}", flush=True)
+                if attempt < total:
                     time.sleep(0.08)      # cho PLC kịp dọn khung dở
             return False
 
