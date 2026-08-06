@@ -52,6 +52,22 @@ class DevicesPage(QWidget):
             lay.addWidget(row)
         root.addWidget(card)
 
+        store = QFrame(); store.setObjectName("Card")
+        stl = QVBoxLayout(store)
+        stl.setContentsMargins(16, 13, 16, 13)
+        stl.setSpacing(6)
+        t3 = QLabel("LƯU TRỮ DỮ LIỆU"); t3.setObjectName("CardTitle")
+        head3 = QHBoxLayout()
+        head3.addWidget(t3); head3.addStretch()
+        self.pill_storage = StatusPill("CHƯA RÕ")
+        head3.addWidget(self.pill_storage)
+        stl.addLayout(head3)
+        self.lbl_storage = QLabel("đang khởi tạo…")
+        self.lbl_storage.setWordWrap(True)
+        self.lbl_storage.setStyleSheet("font-size: 13px;")
+        stl.addWidget(self.lbl_storage)
+        root.addWidget(store)
+
         ai_card = QFrame(); ai_card.setObjectName("Card")
         al = QVBoxLayout(ai_card)
         al.setContentsMargins(16, 13, 16, 13)
@@ -73,3 +89,8 @@ class DevicesPage(QWidget):
 
     def update_ai_mode(self, description):
         self.lbl_mode.setText(description)
+
+    def update_storage(self, state, text):
+        label = {"ok": "ĐANG GHI", "err": "LỖI GHI", "off": "KHÔNG GHI"}
+        self.pill_storage.set_state(state, label.get(state, "—"))
+        self.lbl_storage.setText(text)

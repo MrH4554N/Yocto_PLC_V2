@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMainWindow,
 
 from config import APP_TITLE
 from core.data_worker import DataWorker
+from core.data_logger import describe as describe_storage
 from core.plc_driver import speed_to_raw
 from services.alert_engine import AI_SUGGEST, AlertEngine, apply_advisory
 from ui.page_alerts import AlertsPage
@@ -45,13 +46,15 @@ class HMIMainWindow(QMainWindow):
         self.setStyleSheet(QSS)
         self.resize(1024, 600)
 
-        self.alerts = AlertEngine()
-        self.alerts.log("info", "Khởi động hệ thống",
-                        "HMI bắt đầu thu thập dữ liệu")
+        self.alerts = AlertEngine(on_event=self._write_event)
         self._links = {}
 
         self._build_ui()
         self._start_worker()
+        # Ghi sau khi có worker: nhật ký JSONL nằm trong worker, và dòng đầu
+        # tiên của mỗi phiên phải là mốc khởi động để tra lại được về sau.
+        self.alerts.log("info", "Khởi động hệ thống",
+                        "HMI bắt đầu thu thập dữ liệu")
 
         self._clock = QTimer(self)
         self._clock.timeout.connect(self._tick_clock)
@@ -153,6 +156,7 @@ class HMIMainWindow(QMainWindow):
     def _on_advisory(self, advisory, view):
         apply_advisory(self.alerts, view)
         self.page_monitor.update_ai(view)
+        self._update_storage()
         if view["state"] == "suggest" and view.get("speed") is not None:
             self.page_alerts.show_suggestion(view)
         else:
@@ -207,6 +211,32 @@ class HMIMainWindow(QMainWindow):
         self._refresh_alerts()
 
     # ------------------------------------------------------------------
+    def _write_event(self, kind, alert):
+        """Đổ mọi thay đổi cảnh báo xuống nhật ký JSONL trên /data."""
+        worker = getattr(self, "worker", None)
+        log = getattr(worker, "event_log", None)
+        if log is None:
+            return
+        log.log(kind, alert.severity, alert.title, alert.detail, key=alert.key)
+
+    def _update_storage(self):
+        """Trạng thái ghi thẻ + hàng đợi MQTT cho trang Thiết bị."""
+        telemetry_log = getattr(self.worker, "telemetry_log", None)
+        state, text = describe_storage(telemetry_log,
+                                       getattr(self.worker, "event_log", None))
+        queued = getattr(self.worker.mqtt, "queued", 0)
+        if queued:
+            text += f" · {queued} gói MQTT đang chờ gửi bù"
+        self.page_devices.update_storage(state, text)
+
+        # Ghi hỏng là mất dữ liệu vận hành — phải báo, không nuốt im.
+        if state == "err":
+            self.alerts.raise_alert("storage", "warning",
+                                    "Không ghi được dữ liệu xuống thẻ",
+                                    telemetry_log.error or "")
+        else:
+            self.alerts.clear("storage", title="Đã ghi dữ liệu trở lại")
+
     def _refresh_alerts(self):
         self.page_monitor.update_alerts(self.alerts)
         self.page_alerts.update_alerts(self.alerts)

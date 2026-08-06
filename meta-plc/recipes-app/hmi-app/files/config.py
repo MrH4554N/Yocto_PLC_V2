@@ -59,6 +59,21 @@ MQTT_TOPIC_TELEMETRY = "v1/devices/me/telemetry"
 MQTT_TOPIC_CONTROL = "v1/devices/me/attributes"
 MQTT_TOPIC_ADVISORY = "v1/devices/me/attributes"
 
+# --- LƯU TRỮ DỮ LIỆU ---
+# /data là phân vùng riêng (mmcblk0p5), nằm NGOÀI cặp rootfs A/B của RAUC nên
+# không bị xoá khi cập nhật OTA. Xem data.mount trong cùng recipe.
+DATA_DIR = os.environ.get("HMI_DATA_DIR", "/data")
+TELEMETRY_DIR = os.path.join(DATA_DIR, "telemetry")
+EVENT_DIR = os.path.join(DATA_DIR, "events")
+# ~10 MB/ngày ở nhịp 2 Hz, nên 300 MB ≈ một tháng dữ liệu trên phân vùng 512 MB.
+TELEMETRY_MAX_MB = int(os.environ.get("HMI_TELEMETRY_MAX_MB", "300"))
+EVENT_MAX_MB = int(os.environ.get("HMI_EVENT_MAX_MB", "20"))
+# Gom mẫu 30 giây rồi mới ghi + fsync: 2 lượt ghi/phút thay vì 120.
+LOG_FLUSH_INTERVAL_S = float(os.environ.get("HMI_LOG_FLUSH_S", "30"))
+
+# --- MQTT: hàng đợi khi mất mạng ---
+MQTT_QUEUE_MAX = int(os.environ.get("MQTT_QUEUE_MAX", "20000"))
+
 # --- Chu kỳ ---
 POLL_INTERVAL = 0.5
 AI_EVERY_N = 10

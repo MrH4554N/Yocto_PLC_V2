@@ -1,7 +1,10 @@
 [Unit]
 Description=Industrial HMI Application (PyQt5)
-After=weston.service
+After=weston.service data.mount
 Requires=weston.service
+# Không đòi Requires= với /data: mất phân vùng dữ liệu thì HMI vẫn phải điều
+# khiển được băng tải, chỉ là không ghi log (giao diện báo rõ ở trang Thiết bị).
+RequiresMountsFor=/data
 
 [Service]
 Type=simple

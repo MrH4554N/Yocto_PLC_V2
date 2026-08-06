@@ -48,10 +48,22 @@ class Alert:
 class AlertEngine:
     """Giữ danh sách cảnh báo đang mở + lịch sử gần đây."""
 
-    def __init__(self, history_limit=HISTORY_LIMIT):
+    def __init__(self, history_limit=HISTORY_LIMIT, on_event=None):
         self._active = {}                              # key -> Alert
         self._history = deque(maxlen=history_limit)    # Alert đã đóng / sự kiện
         self.revision = 0                              # tăng mỗi lần đổi, UI dựa vào để vẽ lại
+        # Gọi khi có sự kiện mới (mở / đóng / ghi nhận). Dùng để đổ xuống nhật
+        # ký JSONL trên /data: lịch sử trong RAM chỉ giữ 80 dòng và mất khi
+        # reboot, mà tra sự cố thì phải tra được của tuần trước.
+        self._on_event = on_event
+
+    def _notify(self, kind, alert):
+        if self._on_event is None:
+            return
+        try:
+            self._on_event(kind, alert)
+        except Exception:
+            pass          # nhật ký hỏng không được phép làm hỏng cảnh báo
 
     # ------------------------------------------------------------------ ghi
     def raise_alert(self, key, severity, title, detail="", action=None, payload=None):
@@ -73,6 +85,7 @@ class AlertEngine:
         alert = Alert(key, severity, title, detail, action, payload)
         self._active[key] = alert
         self.revision += 1
+        self._notify("raised", alert)
         return alert
 
     def clear(self, key, title=None, detail=""):
@@ -86,6 +99,7 @@ class AlertEngine:
             alert.detail = detail
         self._history.appendleft(alert)
         self.revision += 1
+        self._notify("cleared", alert)
         return alert
 
     def log(self, severity, title, detail=""):
@@ -94,6 +108,7 @@ class AlertEngine:
         event.resolved_ts = event.ts if severity == "info" else None
         self._history.appendleft(event)
         self.revision += 1
+        self._notify("event", event)
         return event
 
     # ------------------------------------------------------------------ đọc

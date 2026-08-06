@@ -1,0 +1,23 @@
+[Unit]
+# Phân vùng dữ liệu (mmcblk0p5, nhãn "data" trong plc-hmi-rauc.wks).
+#
+# Phân vùng này nằm NGOÀI cặp rootfs A/B của RAUC, nên nó là chỗ duy nhất ghi
+# được mà không bị xoá sau mỗi lần cập nhật OTA. Ghi log vào rootfs thì cập
+# nhật một phát là mất sạch dữ liệu vận hành.
+Description=Phân vùng dữ liệu HMI (telemetry + nhật ký sự kiện)
+Before=local-fs.target
+After=dev-disk-by\x2dlabel-data.device
+Requires=dev-disk-by\x2dlabel-data.device
+
+[Mount]
+# Tìm theo NHÃN chứ không theo /dev/mmcblk0p5: đổi loại thẻ nhớ hay thêm ổ USB
+# là số hiệu thiết bị đổi theo, còn nhãn thì không.
+What=/dev/disk/by-label/data
+Where=/data
+Type=ext4
+# noatime: mỗi lần đọc file không ghi lại thời điểm truy cập — bớt một lượt
+# ghi vô ích lên thẻ SD.
+Options=rw,noatime,nodiratime,errors=remount-ro
+
+[Install]
+WantedBy=local-fs.target

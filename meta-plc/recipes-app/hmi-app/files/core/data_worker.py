@@ -15,11 +15,15 @@ import time
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from config import AI_EVERY_N, POLL_INTERVAL
+from config import (AI_EVERY_N, EVENT_DIR, EVENT_MAX_MB, LOG_FLUSH_INTERVAL_S,
+                    POLL_INTERVAL, TELEMETRY_DIR, TELEMETRY_MAX_MB)
+from core.data_logger import EventLogger, TelemetryLogger
 from core.ina_sensor import INASensor
 from core.mqtt_publisher import MqttPublisher
 from core.plc_driver import PLCDriver, raw_to_speed, speed_to_raw
 from services.ai_service import AIService
+
+_MB = 1024 * 1024
 
 
 class DataWorker(QThread):
@@ -47,6 +51,13 @@ class DataWorker(QThread):
         self.ina = INASensor()
         self.mqtt = MqttPublisher()
         self.ai = AIService()
+
+        # Ghi xuống /data: nguồn dữ liệu DUY NHẤT sống sót qua reboot và qua
+        # mất mạng. Cũng là nguồn để thu thêm dữ liệu train lại model sau này.
+        self.telemetry_log = TelemetryLogger(
+            TELEMETRY_DIR, max_bytes=TELEMETRY_MAX_MB * _MB,
+            flush_interval_s=LOG_FLUSH_INTERVAL_S)
+        self.event_log = EventLogger(EVENT_DIR, max_bytes=EVENT_MAX_MB * _MB)
 
         self.links = {"plc": False, "mqtt": self.mqtt.connected,
                       "ina219": self.ina.available, "ai": False}
@@ -122,11 +133,20 @@ class DataWorker(QThread):
             if self.ina.available:
                 voltage, current, power = self.ina.read()
 
-            # --- PHÁT TELEMETRY LÊN UI & MQTT ---
+            # --- PHÁT TELEMETRY LÊN UI & MQTT & GHI XUỐNG THẺ ---
             telemetry = {"speed": speed, "voltage": voltage,
                          "current": current, "power": power, "ts": time.time()}
             self.telemetry_update.emit(telemetry)
             self.mqtt.publish_telemetry(telemetry)
+
+            # Chỉ ghi khi số liệu là thật. Ghi số 0 lúc mất cảm biến sẽ nhét
+            # vào tập dữ liệu những mẫu "băng tải đứng yên, không dòng, không
+            # áp" chưa từng xảy ra — train lại trên đó là dạy model điều sai.
+            if self.links["plc"] and self.ina.available:
+                self.telemetry_log.log(speed_rpm=speed, voltage_v=voltage,
+                                       current_a=current,
+                                       cmd_register=self.cmd_register,
+                                       ts=telemetry["ts"])
 
             # --- NẠP MẪU CHO AI (mỗi chu kỳ) ---
             # Mất PLC hoặc mất cảm biến dòng/áp thì telemetry về 0. Nạp số 0 vào
@@ -219,6 +239,10 @@ class DataWorker(QThread):
 
     def stop(self):
         self.is_running = False
+        self.wait()
+        # Đẩy nốt bộ đệm rồi mới đóng: tắt máy không được phép mất 30 giây
+        # dữ liệu cuối cùng — đó thường lại là đoạn quanh sự cố.
+        self.telemetry_log.close()
+        self.event_log.close()
         self.mqtt.close()
         self.plc.close()
-        self.wait()

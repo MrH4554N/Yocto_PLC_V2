@@ -15,6 +15,8 @@ SRC_URI = " \
     file://ihcs \
     file://artifact \
     file://hmi-app.service \
+    file://data.mount \
+    file://hmi-data.conf \
     file://mqtt_secrets.example.py \
     file://mqtt_secrets.py \
 "
@@ -25,7 +27,10 @@ inherit systemd useradd
 USERADD_PACKAGES = "${PN}"
 GROUPADD_PARAM:${PN} = "-r i2c"
 
-SYSTEMD_SERVICE:${PN} = "hmi-app.service"
+# data.mount phải nằm trong danh sách này thì systemd mới enable nó lúc cài;
+# thiếu nó thì /data không được mount và log sẽ ghi nhầm vào rootfs — nơi
+# RAUC xoá sạch ở lần cập nhật OTA kế tiếp.
+SYSTEMD_SERVICE:${PN} = "hmi-app.service data.mount"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
 APP_INSTALL_DIR = "${libdir}/hmi-app"
@@ -54,9 +59,15 @@ do_install() {
     install -d ${D}${datadir}/${PN}
     cp -r ${UNPACKDIR}/artifact ${D}${datadir}/${PN}/
 
-    # 3. Service systemd
+    # 3. Service systemd + mount phân vùng dữ liệu
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${UNPACKDIR}/hmi-app.service ${D}${systemd_system_unitdir}/
+    install -m 0644 ${UNPACKDIR}/data.mount ${D}${systemd_system_unitdir}/
+
+    # 4. Thư mục dữ liệu + quyền cho user weston (tmpfiles chạy sau khi mount)
+    install -d ${D}${sysconfdir}/tmpfiles.d
+    install -m 0644 ${UNPACKDIR}/hmi-data.conf ${D}${sysconfdir}/tmpfiles.d/
+    install -d ${D}/data
 }
 
 # Thư viện bắt buộc
@@ -88,6 +99,9 @@ RDEPENDS:${PN} += " \
 
 FILES:${PN} += " \
     ${APP_INSTALL_DIR} \
+    ${sysconfdir}/tmpfiles.d/hmi-data.conf \
+    ${systemd_system_unitdir}/data.mount \
+    /data \
     ${bindir}/hmi-app \
     ${datadir}/${PN} \
     ${systemd_system_unitdir}/hmi-app.service \
