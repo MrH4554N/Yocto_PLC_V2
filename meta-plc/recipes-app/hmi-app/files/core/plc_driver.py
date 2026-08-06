@@ -71,10 +71,22 @@ class PLCDriver:
                         stopbits=serial.STOPBITS_ONE, 
                         timeout=0.5
                     )
+                    # In THAM SỐ THẬT SỰ đã mở, không phải tham số mong muốn.
+                    # Trước đây baudrate là hằng số cứng 38400 trong hàm này;
+                    # giờ nó đi qua config.py rồi qua /data/devices.json — hai
+                    # tầng gián tiếp mới, mà sai baudrate thì PLC im lặng hoàn
+                    # toàn và triệu chứng nhìn hệt như đứt dây. Một dòng log
+                    # ở đây tiết kiệm cả buổi mò.
+                    print(f"[PLC] mở {self.ser.port} @ {self.ser.baudrate} "
+                          f"{self.ser.bytesize}{self.ser.parity}"
+                          f"{self.ser.stopbits} timeout={self.ser.timeout}s "
+                          f"| D{self.addr_speed} tốc độ, D{self.addr_cmd} lệnh",
+                          flush=True)
                 self.connected = True
             except Exception as e:
                 self.connected = False
-                print(f"[PLC] Lỗi mở cổng Serial: {e}")
+                print(f"[PLC] Lỗi mở cổng Serial {self.port} @ {self.baudrate}: {e}",
+                      flush=True)
         return self.connected
 
     def _get_fx_address(self, reg_index):
