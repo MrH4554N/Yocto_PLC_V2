@@ -58,6 +58,7 @@ class DataWorker(QThread):
         # chuẩn ra điểm làm việc, nên ở đây chỉ chuyển tiếp con số thô. None =
         # chưa đọc được: AI sẽ chạy chế độ suy giảm (suy từ điện áp).
         self.cmd_register = None
+        self.last_write_error = None      # lý do lần ghi hỏng gần nhất
 
         # Danh sách trạm nằm trên /data nên đổi trạm không cần build lại image.
         self.registry = DeviceRegistry(DEVICES_FILE, {
@@ -310,15 +311,24 @@ class DataWorker(QThread):
         đi qua nút bấm của người vận hành.
         """
         raw = speed_to_raw(speed_rpm)
+        where = f"{self.station.id} {self.plc.port}@{self.plc.baudrate} D{self.plc.addr_cmd}"
         try:
             if not self.plc.write_raw(raw):
-                raise IOError("Modbus write error")
+                raise IOError("PLC không trả ACK sau 3 lần thử")
         except Exception as e:
+            # In ra stdout để journalctl -u hmi-app giữ lại: statusbar bị nhịp
+            # AI ghi đè sau 5 giây, mà lỗi ghi là thứ người ta đi tìm lúc 11
+            # giờ đêm hôm sau. Kèm đủ cổng/baudrate/thanh ghi để khỏi phải đoán.
+            self.last_write_error = f"{e}  [{where}, giá trị {raw}]"
+            print(f"[PLC] GHI HỎNG: {self.last_write_error}", flush=True)
             self.status_update.emit(f"Lỗi ghi PLC: {e}")
             return False
 
         # Lệnh mới có hiệu lực ngay với AI ở chu kỳ kế tiếp (chu kỳ sau sẽ đọc
         # lại từ PLC để xác nhận).
+        self.last_write_error = None
+        print(f"[PLC] ghi {speed_rpm:.0f} rpm -> D{self.plc.addr_cmd}={raw} OK "
+              f"[{where}]", flush=True)
         self.cmd_register = raw
         self.command_update.emit(raw)
         self.mqtt.publish_control(raw, speed_rpm)

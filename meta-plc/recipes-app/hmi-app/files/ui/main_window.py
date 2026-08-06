@@ -342,8 +342,25 @@ class HMIMainWindow(QMainWindow):
             self.page_control.show_written(speed, raw)
             self.alerts.log("info", f"Đã ghi setpoint {speed} rpm",
                             f"thủ công · D8116 = {raw}")
+            self.alerts.clear("plc_write", title="Đã ghi được xuống PLC trở lại")
             self._on_status(f"Đã ghi thủ công {speed} rpm (D8116 = {raw}).")
-            self._refresh_alerts()
+        else:
+            self._write_failed(speed)
+        self._refresh_alerts()
+
+    def _write_failed(self, speed):
+        """Ghi hỏng phải Ở LẠI màn hình.
+
+        Trước đây lỗi chỉ hiện một dòng statusbar rồi bị nhịp AI ghi đè sau 5
+        giây — người vận hành quay đi quay lại là mất dấu, và nhật ký cũng
+        không có gì. Nay nó thành cảnh báo đang mở (nằm ở tab Cảnh báo cho tới
+        khi ghi được trở lại) và được ghi xuống /data/events.
+        """
+        detail = getattr(self.worker, "last_write_error", "") or ""
+        self.alerts.raise_alert(
+            "plc_write", "critical", f"Không ghi được lệnh {speed} rpm xuống PLC",
+            detail)
+        self._on_status(f"LỖI: không ghi được {speed} rpm xuống PLC.")
 
     def _apply_ai(self, speed):
         if self.worker.write_speed(speed):
@@ -354,8 +371,11 @@ class HMIMainWindow(QMainWindow):
             self.alerts.clear(AI_SUGGEST,
                               title=f"Đã phê duyệt đề xuất {speed} rpm",
                               detail=f"người vận hành xác nhận · D8116 = {raw}")
+            self.alerts.clear("plc_write", title="Đã ghi được xuống PLC trở lại")
             self._on_status(f"Đã áp dụng đề xuất AI: {speed} rpm (D8116 = {raw}).")
-            self._refresh_alerts()
+        else:
+            self._write_failed(speed)
+        self._refresh_alerts()
 
     def _dismiss_ai(self):
         self.page_alerts.clear_suggestion("Đã bỏ qua đề xuất.",
