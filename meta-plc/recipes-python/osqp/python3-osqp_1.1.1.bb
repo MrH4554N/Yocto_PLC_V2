@@ -26,12 +26,23 @@ INSANE_SKIP:${PN} += "already-stripped architecture file-rdeps libdir"
 do_install() {
     install -d ${D}${PYTHON_SITEPACKAGES_DIR}
     unzip -q ${UNPACKDIR}/osqp.zip -d ${D}${PYTHON_SITEPACKAGES_DIR}/
+
+    # Bo test cua osqp import torch/pytest/joblib - khong dung tren thiet bi va
+    # de lam nguoi doc tuong image con thieu ba goi do.
+    rm -rf ${D}${PYTHON_SITEPACKAGES_DIR}/osqp/tests
 }
 
 FILES:${PN} += "${PYTHON_SITEPACKAGES_DIR}/*"
 
+# jinja2 KHONG phai tuy chon: osqp/interface.py import no ngay dong dau
+# (`from jinja2 import Environment, PackageLoader, select_autoescape`) cho bo
+# sinh ma C, nen thieu no la `import osqp` chet ngay - app tuong nhu thieu osqp
+# va tu ha cap xuong che do chi phat hien bat thuong.
+# joblib/torch/pytest chi xuat hien trong osqp/tests va osqp/nn, khong nap luc
+# import, nen khong dua vao day.
 RDEPENDS:${PN} += " \
     python3-core \
     python3-numpy \
     python3-scipy \
+    python3-jinja2 \
 "
