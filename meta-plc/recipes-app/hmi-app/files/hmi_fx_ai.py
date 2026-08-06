@@ -55,11 +55,14 @@ def main():
     # Ẩn con trỏ chuột nếu dùng màn hình cảm ứng toàn thời gian
     # app.setOverrideCursor(Qt.BlankCursor)
 
-    splash = SplashScreen(title=APP_TITLE, subtitle="Đang khởi động…")
+    splash = SplashScreen(title=APP_TITLE, subtitle="Đang khởi động…",
+                          fill_ms=SPLASH_MIN_MS)
     splash.showFullScreen()
     app.processEvents()
 
+    splash.set_status("Đang mở giao diện…", 0.25)
     window = HMIMainWindow()          # khởi động luồng thu thập + nạp artifact
+    splash.set_status("Đang nạp mô hình AI…", 0.55)
     state = {"done": False}
 
     def finish():
@@ -72,10 +75,12 @@ def main():
     started_at = time.monotonic()
 
     def on_ai_ready(info):
-        splash.set_status(f"Đã nạp mô hình AI ({info.get('mode', '?')})")
-        # Giữ nốt phần còn lại của SPLASH_MIN_MS rồi mới vào.
+        # Chỉ tới đây thanh mới được phép chạy nốt: nó phải nói thật là đã
+        # nạp xong, không phải chạy cho đẹp rồi đứng chờ.
+        splash.set_status(f"Đã nạp mô hình AI ({info.get('mode', '?')})", 1.0)
+        # Giữ nốt phần còn lại của SPLASH_MIN_MS để thanh kịp chạy tới cuối.
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
-        QTimer.singleShot(max(0, SPLASH_MIN_MS - elapsed_ms), finish)
+        QTimer.singleShot(max(400, SPLASH_MIN_MS - elapsed_ms), finish)
 
     window.worker.ai_ready.connect(on_ai_ready)
     QTimer.singleShot(SPLASH_MAX_MS, finish)     # chốt chặn cuối
