@@ -23,9 +23,11 @@ class Station:
     __slots__ = ("id", "name", "model", "location", "port", "baudrate",
                  "slave", "addr_speed", "addr_cmd", "enabled")
 
-    def __init__(self, data, defaults):
-        self.id = str(data.get("id") or "plc1")
-        self.name = data.get("name") or self.id.upper()
+    def __init__(self, data, defaults, index=1):
+        self.id = str(data.get("id") or f"plc{index}")
+        # Người vận hành gọi theo số hiệu hệ thống chứ không theo tên máy, và
+        # tên máy thì hay đổi khi dây chuyền bố trí lại.
+        self.name = data.get("name") or f"Hệ vận hành số {index}"
         self.model = data.get("model") or "Mitsubishi FX"
         self.location = data.get("location") or ""
         self.port = data.get("port") or defaults["port"]
@@ -78,7 +80,8 @@ class DeviceRegistry:
         if not entries:
             entries = [self._default_entry()]
 
-        self.stations = [Station(e, self.defaults) for e in entries]
+        self.stations = [Station(e, self.defaults, i + 1)
+                         for i, e in enumerate(entries)]
         wanted = data.get("selected")
         self.selected_id = wanted if self.get(wanted) else self.stations[0].id
 
@@ -103,7 +106,7 @@ class DeviceRegistry:
 
     def _default_entry(self):
         d = self.defaults
-        return {"id": "plc1", "name": "Băng tải chính",
+        return {"id": "plc1", "name": "Hệ vận hành số 1",
                 "model": "Mitsubishi FX", "location": "",
                 "port": d["port"], "baudrate": d["baudrate"],
                 "slave": d["slave"], "addr_speed": d["addr_speed"],

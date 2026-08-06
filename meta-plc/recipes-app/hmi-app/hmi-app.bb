@@ -17,6 +17,7 @@ SRC_URI = " \
     file://hmi-app.service \
     file://data.mount \
     file://hmi-data.conf \
+    file://assets \
     file://mqtt_secrets.example.py \
     file://mqtt_secrets.py \
 "
@@ -58,6 +59,11 @@ do_install() {
     # 2. Artifact AI (model ONNX + scaler + cấu hình MPC) -> /usr/share/hmi-app/
     install -d ${D}${datadir}/${PN}
     cp -r ${UNPACKDIR}/artifact ${D}${datadir}/${PN}/
+
+    # Logo màn hình khởi động của app (nối tiếp psplash của hệ điều hành)
+    if [ -f ${UNPACKDIR}/assets/logo.png ]; then
+        install -m 0644 ${UNPACKDIR}/assets/logo.png ${D}${datadir}/${PN}/logo.png
+    fi
 
     # 3. Service systemd + mount phân vùng dữ liệu
     install -d ${D}${systemd_system_unitdir}
