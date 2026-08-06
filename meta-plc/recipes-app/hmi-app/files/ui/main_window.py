@@ -1,55 +1,58 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Cửa sổ chính: khung điều hướng và nối tín hiệu giữa worker và các trang."""
+"""Cửa sổ chính: header mỏng, sáu trang, thanh điều hướng dưới cùng.
+
+Đây cũng là nơi duy nhất giữ AlertEngine. Luồng nền chỉ phát signal; mọi thay
+đổi trạng thái cảnh báo đều xảy ra trong luồng giao diện, nên không có khoá,
+không có race, và trang nào cũng đọc cùng một nguồn sự thật.
+"""
 
 import time
 
-from PyQt5.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel,
-                             QMainWindow, QPushButton, QStackedWidget,
-                             QVBoxLayout, QWidget)
 from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMainWindow,
+                             QStackedWidget, QVBoxLayout, QWidget)
 
 from config import APP_TITLE
 from core.data_worker import DataWorker
 from core.plc_driver import speed_to_raw
-from ui.page_ai import AIPage
+from services.alert_engine import AI_SUGGEST, AlertEngine, apply_advisory
+from ui.page_alerts import AlertsPage
 from ui.page_control import ControlPage
-from ui.page_overview import OverviewPage
-from ui.page_system import SystemPage
+from ui.page_devices import DevicesPage
+from ui.page_monitor import MonitorPage
+from ui.page_settings import SettingsPage
 from ui.page_trends import TrendsPage
-from ui.theme import QSS
-from ui.widgets import StatusPill
+from ui.theme import C, QSS
+from ui.widgets import NavBar, StatusDot
+
+NAV_ITEMS = [
+    ("◉", "GIÁM SÁT"),
+    ("∿", "ĐỒ THỊ"),
+    ("⇅", "ĐIỀU KHIỂN"),
+    ("!", "CẢNH BÁO"),
+    ("⚙", "THIẾT BỊ"),
+    ("≡", "CÀI ĐẶT"),
+]
+TAB_ALERTS = 3
 
 
 class HMIMainWindow(QMainWindow):
-    # Icon dùng glyph có sẵn trong DejaVu Sans (font mặc định trên image Yocto,
-    # không có emoji màu)
-    NAV_ITEMS = [
-        ("◉  Tổng quan",   "TỔNG QUAN"),
-        ("↗  Đồ thị",      "ĐỒ THỊ THỜI GIAN THỰC"),
-        ("⇅  Điều khiển",  "ĐIỀU KHIỂN BĂNG TẢI"),
-        ("★  Trợ lý AI",   "TRỢ LÝ AI TỐI ƯU HÓA"),
-        ("⚙  Hệ thống",    "HỆ THỐNG & KẾT NỐI"),
-    ]
-
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_TITLE)
-        self.setWindowFlags(Qt.FramelessWindowHint)   # kiosk mode
+        self.setWindowFlags(Qt.FramelessWindowHint)
         self.setStyleSheet(QSS)
+        self.resize(1024, 600)
+
+        self.alerts = AlertEngine()
+        self.alerts.log("info", "Khởi động hệ thống",
+                        "HMI bắt đầu thu thập dữ liệu")
+        self._links = {}
 
         self._build_ui()
+        self._start_worker()
 
-        # --- luồng thu thập dữ liệu ---
-        self.worker = DataWorker()
-        self.worker.telemetry_update.connect(self._on_telemetry)
-        self.worker.suggestion_ready.connect(self._on_suggestion)
-        self.worker.advisory_status.connect(self._on_advisory_status)
-        self.worker.status_update.connect(self._on_status)
-        self.worker.link_update.connect(self._on_links)
-        self.worker.start()
-
-        # --- đồng hồ ---
         self._clock = QTimer(self)
         self._clock.timeout.connect(self._tick_clock)
         self._clock.start(1000)
@@ -59,155 +62,183 @@ class HMIMainWindow(QMainWindow):
     def _build_ui(self):
         root = QWidget(); root.setObjectName("Root")
         self.setCentralWidget(root)
-        outer = QHBoxLayout(root)
+        outer = QVBoxLayout(root)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # ================= SIDEBAR =================
-        sidebar = QFrame(); sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(210)
-        sl = QVBoxLayout(sidebar)
-        sl.setContentsMargins(14, 18, 14, 14)
-        sl.setSpacing(6)
+        outer.addWidget(self._build_header())
 
-        logo = QLabel("⚡ AI PLC HMI"); logo.setObjectName("Logo")
-        logo_sub = QLabel("Băng chuyền thông minh"); logo_sub.setObjectName("LogoSub")
-        sl.addWidget(logo)
-        sl.addWidget(logo_sub)
-        sl.addSpacing(16)
-
-        self.nav_group = QButtonGroup(self)
-        self.nav_group.setExclusive(True)
-        for i, (label, _) in enumerate(self.NAV_ITEMS):
-            b = QPushButton(label)
-            b.setObjectName("NavBtn")
-            b.setCheckable(True)
-            if i == 0:
-                b.setChecked(True)
-            self.nav_group.addButton(b, i)
-            sl.addWidget(b)
-        self.nav_group.idClicked.connect(self._switch_page)
-
-        sl.addStretch()
-        btn_exit = QPushButton("✖  Thoát ứng dụng")
-        btn_exit.setObjectName("ExitBtn")
-        btn_exit.clicked.connect(self.close)
-        sl.addWidget(btn_exit)
-        outer.addWidget(sidebar)
-
-        # ================= KHU VỰC PHẢI =================
-        right = QVBoxLayout()
-        right.setContentsMargins(0, 0, 0, 0)
-        right.setSpacing(0)
-
-        # --- topbar ---
-        topbar = QFrame(); topbar.setObjectName("Topbar")
-        topbar.setFixedHeight(58)
-        tl = QHBoxLayout(topbar)
-        tl.setContentsMargins(18, 0, 18, 0)
-        self.lbl_page = QLabel(self.NAV_ITEMS[0][1]); self.lbl_page.setObjectName("PageTitle")
-        tl.addWidget(self.lbl_page)
-        tl.addStretch()
-        self.pill_plc  = StatusPill("PLC")
-        self.pill_mqtt = StatusPill("MQTT")
-        self.pill_ai   = StatusPill("AI")
-        for p in (self.pill_plc, self.pill_mqtt, self.pill_ai):
-            tl.addWidget(p)
-            tl.addSpacing(6)
-        self.lbl_clock = QLabel("--:--"); self.lbl_clock.setObjectName("Clock")
-        tl.addWidget(self.lbl_clock)
-        right.addWidget(topbar)
-
-        # --- các trang ---
         self.stack = QStackedWidget()
-        self.page_overview = OverviewPage()
+        self.page_monitor  = MonitorPage()
         self.page_trends   = TrendsPage()
         self.page_control  = ControlPage()
-        self.page_ai       = AIPage()
-        self.page_system   = SystemPage()
-        for p in (self.page_overview, self.page_trends, self.page_control,
-                  self.page_ai, self.page_system):
+        self.page_alerts   = AlertsPage()
+        self.page_devices  = DevicesPage()
+        self.page_settings = SettingsPage()
+        for p in (self.page_monitor, self.page_trends, self.page_control,
+                  self.page_alerts, self.page_devices, self.page_settings):
             self.stack.addWidget(p)
-        right.addWidget(self.stack, stretch=1)
+        outer.addWidget(self.stack, stretch=1)
 
-        # --- statusbar ---
         statusbar = QFrame(); statusbar.setObjectName("Statusbar")
-        statusbar.setFixedHeight(34)
-        bl = QHBoxLayout(statusbar)
-        bl.setContentsMargins(18, 0, 18, 0)
-        self.lbl_status = QLabel("Hệ thống sẵn sàng."); self.lbl_status.setObjectName("StatusMsg")
-        bl.addWidget(self.lbl_status)
-        bl.addStretch()
-        right.addWidget(statusbar)
+        statusbar.setFixedHeight(26)
+        sl = QHBoxLayout(statusbar)
+        sl.setContentsMargins(14, 0, 14, 0)
+        self.lbl_status = QLabel("Hệ thống sẵn sàng.")
+        self.lbl_status.setObjectName("StatusMsg")
+        sl.addWidget(self.lbl_status)
+        outer.addWidget(statusbar)
 
-        outer.addLayout(right, stretch=1)
+        self.nav = NavBar(NAV_ITEMS)
+        self.nav.switched.connect(self.stack.setCurrentIndex)
+        outer.addWidget(self.nav)
 
-        # --- nối tín hiệu điều khiển ---
         self.page_control.write_requested.connect(self._manual_write)
-        self.page_ai.apply_requested.connect(self._apply_ai)
+        self.page_alerts.apply_requested.connect(self._apply_ai)
+        self.page_alerts.dismiss_requested.connect(self._dismiss_ai)
+        self.page_settings.exit_requested.connect(self.close)
+        self._refresh_alerts()
 
-        # cập nhật pill topbar theo link_update
-        self._link_state = {}
+    def _build_header(self):
+        header = QFrame(); header.setObjectName("Header")
+        header.setFixedHeight(50)
+        lay = QHBoxLayout(header)
+        lay.setContentsMargins(16, 0, 16, 0)
+        lay.setSpacing(12)
+
+        mark = QLabel("◉")
+        mark.setStyleSheet(f"color: {C['volt']}; font-size: 17px;")
+        brand = QVBoxLayout(); brand.setSpacing(0)
+        b1 = QLabel("BĂNG TẢI THÔNG MINH"); b1.setObjectName("Brand")
+        b2 = QLabel("IHCS · ADVISORY-ONLY"); b2.setObjectName("BrandSub")
+        brand.addWidget(b1); brand.addWidget(b2)
+
+        lay.addWidget(mark)
+        lay.addLayout(brand)
+        lay.addStretch()
+
+        self.dots = {}
+        for key, text in (("plc", "PLC"), ("ina219", "INA219"),
+                          ("mqtt", "MQTT"), ("ai", "AI")):
+            dot = StatusDot(text)
+            self.dots[key] = dot
+            lay.addWidget(dot)
+            lay.addSpacing(4)
+
+        self.lbl_clock = QLabel("--:--:--"); self.lbl_clock.setObjectName("Clock")
+        lay.addSpacing(8)
+        lay.addWidget(self.lbl_clock)
+        return header
+
+    def _start_worker(self):
+        self.worker = DataWorker()
+        self.worker.telemetry_update.connect(self._on_telemetry)
+        self.worker.advisory_ready.connect(self._on_advisory)
+        self.worker.data_lost.connect(self._on_data_lost)
+        self.worker.command_update.connect(self.page_control.show_command)
+        self.worker.ai_ready.connect(self._on_ai_ready)
+        self.worker.status_update.connect(self._on_status)
+        self.worker.link_update.connect(self._on_links)
+        self.worker.start()
 
     # ------------------------------------------------------------------
-    def _switch_page(self, idx):
-        self.stack.setCurrentIndex(idx)
-        self.lbl_page.setText(self.NAV_ITEMS[idx][1])
-        btn = self.nav_group.button(idx)
-        if btn is not None and not btn.isChecked():
-            btn.setChecked(True)
-
     def _tick_clock(self):
-        self.lbl_clock.setText(time.strftime("%H:%M:%S  %d/%m/%Y"))
+        self.lbl_clock.setText(time.strftime("%H:%M:%S"))
 
-    # ------------------------------------------------------------------
     def _on_telemetry(self, d):
-        self.page_overview.update_telemetry(d)
+        self.page_monitor.update_telemetry(d)
         self.page_trends.update_telemetry(d)
         self.page_control.update_telemetry(d)
 
-    def _on_suggestion(self, text, speed):
-        self.page_ai.show_suggestion(text, speed)
-        self.page_overview.show_suggestion(text)
-        self._on_status(f"AI đề xuất tốc độ {speed} — chờ phê duyệt.")
-
-    def _on_advisory_status(self, state, text, detail):
-        """AI có kết quả nhưng không phải đề xuất cần phê duyệt."""
-        if state == "blocked":
-            self.page_ai.show_blocked(text, detail)
-            self._on_status("AI chặn đề xuất — xem trang Trợ lý AI.")
-        elif state == "warmup":
-            self.page_ai.show_collecting(text, detail)
+    def _on_advisory(self, advisory, view):
+        apply_advisory(self.alerts, view)
+        self.page_monitor.update_ai(view)
+        if view["state"] == "suggest" and view.get("speed") is not None:
+            self.page_alerts.show_suggestion(view)
         else:
-            self.page_ai.show_normal(text, detail)
-        self.page_overview.show_advisory(state, text, detail)
+            self.page_alerts.clear_suggestion(
+                view["text"] if view["state"] == "blocked" else None,
+                view.get("detail"))
+        self._refresh_alerts()
+
+    def _on_data_lost(self, reason):
+        self.page_monitor.set_data_lost(reason)
+        self.alerts.raise_alert("data_input", "critical",
+                                "AI tạm dừng — thiếu dữ liệu đầu vào", reason)
+        self._refresh_alerts()
+
+    def _on_ai_ready(self, info):
+        self.page_devices.update_ai_mode(info.get("description", "—"))
+        self.page_settings.update_model_info(
+            info.get("version"), info.get("n_features"),
+            info.get("warning_threshold"), info.get("critical_threshold"))
+        if info.get("mode") != "full" and info.get("error"):
+            self.alerts.raise_alert(
+                "ai_mode",
+                "critical" if info.get("mode") == "unavailable" else "warning",
+                "Trợ lý AI chạy hạn chế", info["error"])
+            self._refresh_alerts()
 
     def _on_status(self, msg):
-        self.lbl_status.setText(time.strftime("[%H:%M:%S] ") + msg)
+        self.lbl_status.setText(time.strftime("[%H:%M:%S]  ") + msg)
 
     def _on_links(self, links):
-        self.page_system.update_links(links)
-        self.page_system.update_ai_mode(self.worker.ai.describe())
-        pill_map = {"plc": self.pill_plc, "mqtt": self.pill_mqtt, "ai": self.pill_ai}
-        for key, pill in pill_map.items():
-            pill.set_state("ok" if links.get(key) else "err", pill.text())
+        self.page_devices.update_links(links)
+        for key, dot in self.dots.items():
+            dot.set_state("ok" if links.get(key) else "err")
+
+        # Mất/khôi phục kết nối là sự kiện đáng ghi vào nhật ký, không chỉ đổi
+        # màu một cái chấm rồi thôi.
+        for key, name, sev in (("plc", "PLC", "critical"),
+                               ("ina219", "cảm biến dòng/áp INA219", "critical"),
+                               ("mqtt", "MQTT CoreIOT", "warning")):
+            now, before = bool(links.get(key)), self._links.get(key)
+            if before is None:
+                continue
+            if before and not now:
+                self.alerts.raise_alert(f"link_{key}", sev,
+                                        f"Mất kết nối {name}",
+                                        "kiểm tra cáp và nguồn của khối này")
+            elif now and not before:
+                self.alerts.clear(f"link_{key}", title=f"Đã kết nối lại {name}")
+        self._links = dict(links)
+        if links.get("plc") and links.get("ina219"):
+            self.alerts.clear("data_input", title="Dữ liệu đầu vào đã trở lại")
+        self._refresh_alerts()
 
     # ------------------------------------------------------------------
+    def _refresh_alerts(self):
+        self.page_monitor.update_alerts(self.alerts)
+        self.page_alerts.update_alerts(self.alerts)
+        self.nav.set_badge(TAB_ALERTS, self.alerts.count("warning")
+                           + (1 if self.alerts.get(AI_SUGGEST) else 0))
+
     def _manual_write(self, speed):
         if self.worker.write_speed(speed):
             raw = speed_to_raw(speed)
             self.page_control.show_written(speed, raw)
-            self.page_overview.show_applied(speed)
-            self._on_status(f"Đã ghi thủ công: {speed} (Raw: {raw})")
+            self.alerts.log("info", f"Đã ghi setpoint {speed} rpm",
+                            f"thủ công · D8116 = {raw}")
+            self._on_status(f"Đã ghi thủ công {speed} rpm (D8116 = {raw}).")
+            self._refresh_alerts()
 
-    def _apply_ai(self):
-        speed = self.page_ai.current_speed
+    def _apply_ai(self, speed):
         if self.worker.write_speed(speed):
             raw = speed_to_raw(speed)
-            self.page_ai.show_applied()
-            self.page_control.show_written(speed, raw)
-            self.page_overview.show_applied(speed)
-            self._on_status(f"Đã áp dụng đề xuất AI: {speed} (Raw: {raw})")
+            self.page_control.show_written(speed, raw, by_ai=True)
+            self.page_alerts.clear_suggestion(
+                f"Đã áp dụng đề xuất {speed} rpm.", "chờ chu kỳ AI tiếp theo")
+            self.alerts.clear(AI_SUGGEST,
+                              title=f"Đã phê duyệt đề xuất {speed} rpm",
+                              detail=f"người vận hành xác nhận · D8116 = {raw}")
+            self._on_status(f"Đã áp dụng đề xuất AI: {speed} rpm (D8116 = {raw}).")
+            self._refresh_alerts()
+
+    def _dismiss_ai(self):
+        self.page_alerts.clear_suggestion("Đã bỏ qua đề xuất.",
+                                          "chờ chu kỳ AI tiếp theo")
+        self.alerts.clear(AI_SUGGEST, title="Đã bỏ qua đề xuất của AI")
+        self._refresh_alerts()
 
     # ------------------------------------------------------------------
     def closeEvent(self, event):

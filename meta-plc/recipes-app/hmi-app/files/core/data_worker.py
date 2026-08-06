@@ -26,8 +26,10 @@ class DataWorker(QThread):
     """Thu thập dữ liệu + chạy AI, phát kết quả ra giao diện bằng signal."""
 
     telemetry_update = pyqtSignal(dict)        # speed / voltage / current / power
-    suggestion_ready = pyqtSignal(str, int)    # (nội dung, tốc độ đề xuất) — cần phê duyệt
-    advisory_status = pyqtSignal(str, str, str)  # (state, nội dung, dòng chi tiết)
+    advisory_ready = pyqtSignal(dict, dict)    # (advisory JSON, view đã format)
+    data_lost = pyqtSignal(str)                # thiếu đầu vào — nói rõ thiếu gì
+    command_update = pyqtSignal(object)        # giá trị thô D8116 (None nếu chưa đọc được)
+    ai_ready = pyqtSignal(dict)                # thông tin model sau khi nạp artifact
     status_update = pyqtSignal(str)            # thông báo sự kiện cho statusbar
     link_update = pyqtSignal(dict)             # trạng thái kết nối các khối
 
@@ -64,6 +66,7 @@ class DataWorker(QThread):
         # chỉ hiện một dòng rồi bị dòng sau đè mất.
         print(f"[AI] mode={self.ai.mode} artifact={self.ai.artifact_version} "
               f"error={self.ai.error}")
+        self.ai_ready.emit(self.ai.describe_info())
         if not self.links["ai"]:
             self.status_update.emit(f"AI không sẵn sàng: {self.ai.error}")
         elif self.ai.mode == "anomaly_only":
@@ -73,6 +76,7 @@ class DataWorker(QThread):
 
         # Lấy lệnh PLC đang giữ để AI không hiểu nhầm là sai số bám lớn.
         self.cmd_register = self.plc.read_command_register()
+        self.command_update.emit(self.cmd_register)
         if self.cmd_register is not None:
             self.status_update.emit(
                 f"Lệnh PLC hiện hành: D8116 = {self.cmd_register} "
@@ -110,8 +114,9 @@ class DataWorker(QThread):
             # có. Đọc lỗi thì giữ giá trị cũ chứ không xoá về None — một lần
             # trượt khung truyền không phải là "mất hiệu chuẩn".
             latest_cmd = self.plc.read_command_register()
-            if latest_cmd is not None:
+            if latest_cmd is not None and latest_cmd != self.cmd_register:
                 self.cmd_register = latest_cmd
+                self.command_update.emit(latest_cmd)
 
             # --- ĐỌC CẢM BIẾN DÒNG/ÁP ---
             if self.ina.available:
@@ -157,11 +162,7 @@ class DataWorker(QThread):
             return
         advisory, view = result
         self.mqtt.publish_advisory(advisory)
-
-        if view["state"] == "suggest" and view["speed"] is not None:
-            self.suggestion_ready.emit(view["text"], int(view["speed"]))
-        else:
-            self.advisory_status.emit(view["state"], view["text"], view["detail"])
+        self.advisory_ready.emit(advisory, view)
 
         # Nhịp sống: mỗi chu kỳ AI in một dòng lên statusbar KỂ CẢ khi mọi thứ
         # bình thường. Chỉ báo lúc có sự cố thì người vận hành không thể phân
@@ -191,11 +192,8 @@ class DataWorker(QThread):
             missing.append("tốc độ từ PLC")
         if not self.ina.available:
             missing.append("dòng/áp từ cảm biến I2C")
-        self.advisory_status.emit(
-            "blocked",
-            "AI tạm dừng: thiếu " + " và ".join(missing) + ".\n"
-            "Model cần đủ cả tốc độ lẫn dòng-áp mới suy luận được.",
-            "khôi phục kết nối rồi AI sẽ tự chạy lại ở chu kỳ kế tiếp")
+        self.data_lost.emit("Thiếu " + " và ".join(missing)
+                            + " — khôi phục kết nối rồi AI tự chạy lại.")
 
     # ------------------------------------------------------------------
     def write_speed(self, speed_rpm):
@@ -215,6 +213,7 @@ class DataWorker(QThread):
         # Lệnh mới có hiệu lực ngay với AI ở chu kỳ kế tiếp (chu kỳ sau sẽ đọc
         # lại từ PLC để xác nhận).
         self.cmd_register = raw
+        self.command_update.emit(raw)
         self.mqtt.publish_control(raw, speed_rpm)
         return True
 

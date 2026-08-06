@@ -32,7 +32,9 @@ ARTIFACT_DIR = os.environ.get(
 
 # --- PLC Mitsubishi FX qua Modbus RTU ---
 PLC_PORT = os.environ.get("PLC_PORT", "/dev/ttyUSB0")
-PLC_BAUDRATE = int(os.environ.get("PLC_BAUDRATE", "9600"))
+# 38400 là tốc độ rig thật đang chạy. Trước đây config ghi 9600 còn driver
+# mở cứng 38400 — trang Thiết bị hiện con số này nên phải nói đúng.
+PLC_BAUDRATE = int(os.environ.get("PLC_BAUDRATE", "38400"))
 PLC_SLAVE = int(os.environ.get("PLC_SLAVE", "1"))
 PLC_TIMEOUT = 1
 ADDR_D120_SPEED = 120

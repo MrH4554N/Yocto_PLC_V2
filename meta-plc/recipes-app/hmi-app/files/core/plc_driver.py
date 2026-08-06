@@ -12,8 +12,8 @@ import serial
 import threading
 
 from command_map import CommandMap, load_calibration
-from config import (ADDR_D120_SPEED, ADDR_D8116_CMD, ARTIFACT_DIR, PLC_PORT,
-                    RAW_MAX, RAW_MIN)
+from config import (ADDR_D120_SPEED, ADDR_D8116_CMD, ARTIFACT_DIR,
+                    PLC_BAUDRATE, PLC_PORT, RAW_MAX, RAW_MIN)
 
 # Một bảng tra dùng chung cho cả app: đường ghi PLC và đường dựng feature cho
 # AI phải hiểu con số trong D8116 giống hệt nhau.
@@ -46,8 +46,8 @@ class PLCDriver:
             try:
                 if self.ser is None or not self.ser.is_open:
                     self.ser = serial.Serial(
-                        port=PLC_PORT, 
-                        baudrate=38400, 
+                        port=PLC_PORT,
+                        baudrate=PLC_BAUDRATE,
                         bytesize=serial.SEVENBITS,
                         parity=serial.PARITY_EVEN, 
                         stopbits=serial.STOPBITS_ONE, 

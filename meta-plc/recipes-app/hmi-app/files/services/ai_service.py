@@ -60,6 +60,24 @@ class AIService:
             self._builder = self._advisor.make_observation_builder()
         return self.ready
 
+    def describe_info(self):
+        """Thông tin model cho trang Thiết bị / Cài đặt (dict, an toàn khi lỗi)."""
+        advisor = self._advisor
+        engine = getattr(advisor, "_engine", None)
+        thresholds = getattr(engine, "_anomaly_thresholds", None) or \
+            getattr(engine, "_thresholds", None) or {}
+        features = getattr(engine, "_feature_list", None) or \
+            getattr(engine, "_features", None) or []
+        return {
+            "mode": self.mode,
+            "description": self.describe(),
+            "version": self.artifact_version,
+            "error": self.error,
+            "n_features": len(features),
+            "warning_threshold": thresholds.get("warning_threshold"),
+            "critical_threshold": thresholds.get("critical_threshold"),
+        }
+
     @property
     def warmup_remaining(self):
         """Số mẫu còn thiếu trước khi chấm được điểm bất thường."""
