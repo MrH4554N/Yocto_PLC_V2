@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Cửa sổ chính: header mỏng, sáu trang, thanh điều hướng dưới cùng.
+"""Cửa sổ chính — điều hướng hai tầng.
+
+    Tầng 1  màn CHỌN HỆ THỐNG: không có thanh tab, chỉ có các thẻ hệ thống.
+    Tầng 2  không gian làm việc của hệ thống đã chọn: Giám sát / Đồ thị /
+            Điều khiển / Cảnh báo / Gateway / Cài đặt, kèm nút ← quay lại.
+
+Chia hai tầng vì các tab kia chỉ có nghĩa khi đã biết đang xem MÁY NÀO. Hiện
+sẵn chúng ở màn đầu chỉ dẫn người vận hành tới một trang trống, và tệ hơn: một
+trang có số liệu của máy mà họ tưởng mình chưa chọn.
 
 Đây cũng là nơi duy nhất giữ AlertEngine. Luồng nền chỉ phát signal; mọi thay
 đổi trạng thái cảnh báo đều xảy ra trong luồng giao diện, nên không có khoá,
@@ -11,7 +19,8 @@ import time
 
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMainWindow,
-                             QStackedWidget, QVBoxLayout, QWidget)
+                             QPushButton, QStackedWidget, QVBoxLayout,
+                             QWidget)
 
 from config import APP_TITLE, MQTT_BROKER, MQTT_PORT
 from core.data_worker import DataWorker
@@ -28,8 +37,9 @@ from ui.page_trends import TrendsPage
 from ui.theme import C, QSS
 from ui.widgets import NavBar, StatusDot
 
+# Thanh tab của TẦNG 2. Màn chọn hệ thống nằm ngoài danh sách này: nó là
+# stack index 0, còn nav index i ứng với stack index i + 1.
 NAV_ITEMS = [
-    ("▤", "TRẠM"),
     ("◉", "GIÁM SÁT"),
     ("∿", "ĐỒ THỊ"),
     ("⇅", "ĐIỀU KHIỂN"),
@@ -37,9 +47,9 @@ NAV_ITEMS = [
     ("↑", "GATEWAY"),
     ("≡", "CÀI ĐẶT"),
 ]
-TAB_STATIONS = 0
-TAB_MONITOR = 1
-TAB_ALERTS = 4
+PAGE_PICKER = 0
+NAV_MONITOR = 0
+TAB_ALERTS = 3
 
 # Cảnh báo đã xử lý rụng dần khỏi màn hình; quét lại mỗi chừng này giây.
 PRUNE_INTERVAL_MS = 3000
@@ -108,8 +118,10 @@ class HMIMainWindow(QMainWindow):
         outer.addWidget(statusbar)
 
         self.nav = NavBar(NAV_ITEMS)
-        self.nav.switched.connect(self.stack.setCurrentIndex)
+        self.nav.switched.connect(lambda i: self.stack.setCurrentIndex(i + 1))
         outer.addWidget(self.nav)
+        self.statusbar = statusbar
+        self._show_picker()
 
         self.page_stations.station_selected.connect(self._select_station)
         self.page_control.write_requested.connect(self._manual_write)
@@ -125,13 +137,24 @@ class HMIMainWindow(QMainWindow):
         lay.setContentsMargins(16, 0, 16, 0)
         lay.setSpacing(12)
 
+        # Nút quay lại chỉ hiện khi đang ở trong một hệ thống — ở màn chọn thì
+        # không có gì để quay về.
+        self.btn_back = QPushButton("←")
+        self.btn_back.setObjectName("Chip")
+        self.btn_back.setFixedSize(44, 32)
+        self.btn_back.clicked.connect(self._show_picker)
+        self.btn_back.hide()
+
         mark = QLabel("◉")
         mark.setStyleSheet(f"color: {C['volt']}; font-size: 17px;")
         brand = QVBoxLayout(); brand.setSpacing(0)
-        b1 = QLabel("BĂNG TẢI THÔNG MINH"); b1.setObjectName("Brand")
-        b2 = QLabel("IHCS · ADVISORY-ONLY"); b2.setObjectName("BrandSub")
-        brand.addWidget(b1); brand.addWidget(b2)
+        self.lbl_brand = QLabel("BĂNG TẢI THÔNG MINH")
+        self.lbl_brand.setObjectName("Brand")
+        self.lbl_brand_sub = QLabel("IHCS · ADVISORY-ONLY")
+        self.lbl_brand_sub.setObjectName("BrandSub")
+        brand.addWidget(self.lbl_brand); brand.addWidget(self.lbl_brand_sub)
 
+        lay.addWidget(self.btn_back)
         lay.addWidget(mark)
         lay.addLayout(brand)
         lay.addStretch()
@@ -163,6 +186,26 @@ class HMIMainWindow(QMainWindow):
         self.worker.start()
 
     # ------------------------------------------------------------------
+    def _show_picker(self):
+        """Về màn chọn hệ thống: giấu thanh tab để không ai bấm nhầm vào một
+        trang đang nói về hệ thống mà họ tưởng chưa chọn."""
+        self.stack.setCurrentIndex(PAGE_PICKER)
+        self.nav.hide()
+        self.btn_back.hide()
+        self.lbl_brand.setText("BĂNG TẢI THÔNG MINH")
+        self.lbl_brand_sub.setText("IHCS · ADVISORY-ONLY")
+
+    def _enter_workspace(self, station=None):
+        """Vào không gian làm việc của hệ thống đang chọn."""
+        self.nav.show()
+        self.btn_back.show()
+        self.nav.select(NAV_MONITOR)
+        self.stack.setCurrentIndex(NAV_MONITOR + 1)
+        station = station or getattr(self.worker, "station", None)
+        if station is not None:
+            self.lbl_brand.setText(station.name.upper())
+            self.lbl_brand_sub.setText(station.summary)
+
     def _tick_clock(self):
         self.lbl_clock.setText(time.strftime("%H:%M:%S"))
 
@@ -222,8 +265,11 @@ class HMIMainWindow(QMainWindow):
             self._refresh_alerts()
 
     def _select_station(self, station_id):
-        if self.worker.select_station(station_id):
-            self.nav.select(TAB_MONITOR)          # chọn xong là vào xem luôn
+        station = self.worker.registry.get(station_id)
+        if station_id == self.worker.station.id:
+            self._enter_workspace(station)        # chọn lại chính nó: vào luôn
+        elif self.worker.select_station(station_id):
+            self._enter_workspace(station)
 
     def _on_links(self, links):
         self.page_stations.update_registry(self.worker.registry, links)
