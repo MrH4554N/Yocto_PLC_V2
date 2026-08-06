@@ -1,7 +1,11 @@
 #!/bin/sh
 # Chép app lên Pi đang chạy để thử nhanh, KHÔNG cần bitbake lại.
 #
-#     ./meta-plc/scripts/deploy-dev.sh root@192.168.1.50
+#     ./meta-plc/scripts/deploy-dev.sh root@192.168.1.50            # bản đang sửa
+#     ./meta-plc/scripts/deploy-dev.sh root@192.168.1.50 71cefb81   # LÙI về một commit
+#
+# Tham số thứ hai là commit bất kỳ: dùng để lùi về bản chạy được, hoặc để dò
+# xem commit nào làm hỏng (chép commit A -> thử -> chép commit B -> thử).
 #
 # Chỉ dùng để THỬ. Mọi thứ chép bằng tay nằm trong phân vùng rootfs A/B, nên
 # lần cập nhật RAUC kế tiếp sẽ ghi đè sạch. Bản chính thức vẫn phải build.
@@ -16,6 +20,15 @@ TARGET="$1"
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 FILES="$HERE/../recipes-app/hmi-app/files"
+
+REF="$2"
+if [ -n "$REF" ]; then
+    TMP=$(mktemp -d)
+    ( cd "$HERE/../.." && git archive "$REF" meta-plc/recipes-app/hmi-app/files ) \
+        | tar -x -C "$TMP"
+    FILES="$TMP/meta-plc/recipes-app/hmi-app/files"
+    echo "==> LẤY BẢN $REF (không phải bản đang sửa)"
+fi
 APP=/usr/lib/hmi-app
 SHARE=/usr/share/hmi-app
 
