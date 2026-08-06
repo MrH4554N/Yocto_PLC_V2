@@ -34,20 +34,37 @@ def raw_to_speed(raw):
 
 
 class PLCDriver:
-    """Driver đọc/ghi PLC dùng Mitsubishi Computer Link."""
+    """Driver đọc/ghi PLC dùng Mitsubishi Computer Link.
 
-    def __init__(self):
+    Nhận tham số trạm thay vì đọc thẳng config: HMI quản nhiều trạm PLC và
+    người vận hành đổi trạm ngay trên màn hình, nên cổng/baudrate/địa chỉ thanh
+    ghi phải đi theo trạm chứ không phải theo bản build.
+    """
+
+    def __init__(self, port=None, baudrate=None, slave=None,
+                 addr_speed=None, addr_cmd=None):
         self._lock = threading.Lock()
         self.connected = False
         self.ser = None
+        self.port = port or PLC_PORT
+        self.baudrate = int(baudrate or PLC_BAUDRATE)
+        self.slave = slave
+        self.addr_speed = int(addr_speed if addr_speed is not None else ADDR_D120_SPEED)
+        self.addr_cmd = int(addr_cmd if addr_cmd is not None else ADDR_D8116_CMD)
+
+    @classmethod
+    def from_station(cls, station):
+        return cls(port=station.port, baudrate=station.baudrate,
+                   slave=station.slave, addr_speed=station.addr_speed,
+                   addr_cmd=station.addr_cmd)
 
     def connect(self):
         with self._lock:
             try:
                 if self.ser is None or not self.ser.is_open:
                     self.ser = serial.Serial(
-                        port=PLC_PORT,
-                        baudrate=PLC_BAUDRATE,
+                        port=self.port,
+                        baudrate=self.baudrate,
                         bytesize=serial.SEVENBITS,
                         parity=serial.PARITY_EVEN, 
                         stopbits=serial.STOPBITS_ONE, 
@@ -109,7 +126,7 @@ class PLCDriver:
 
     def read_speed(self):
         with self._lock:
-            val = self._read_register(ADDR_D120_SPEED)
+            val = self._read_register(self.addr_speed)
         self.connected = True
         return val
 
@@ -117,7 +134,7 @@ class PLCDriver:
         """Giá trị THÔ của D8116. AI cần con số thô để tự tra bảng hiệu chuẩn."""
         try:
             with self._lock:
-                return self._read_register(ADDR_D8116_CMD)
+                return self._read_register(self.addr_cmd)
         except Exception:
             return None
 
@@ -127,7 +144,7 @@ class PLCDriver:
 
     def write_raw(self, raw_command):
         with self._lock:
-            return self._write_register(ADDR_D8116_CMD, raw_command)
+            return self._write_register(self.addr_cmd, raw_command)
 
     def close(self):
         try:

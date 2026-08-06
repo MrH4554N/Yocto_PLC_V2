@@ -106,6 +106,7 @@ QPushButton#Chip {{
 QPushButton#Chip:checked {{
     background: {C['accent']}; border-color: {C['accent']}; color: white;
 }}
+QPushButton#Chip:disabled {{ color: {C['dim']}; border-color: {C['panel2']}; }}
 
 /* ---------- Nhập liệu ---------- */
 QSpinBox {{

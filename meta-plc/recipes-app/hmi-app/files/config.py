@@ -65,6 +65,8 @@ MQTT_TOPIC_ADVISORY = "v1/devices/me/attributes"
 DATA_DIR = os.environ.get("HMI_DATA_DIR", "/data")
 TELEMETRY_DIR = os.path.join(DATA_DIR, "telemetry")
 EVENT_DIR = os.path.join(DATA_DIR, "events")
+# Danh sách trạm PLC — sửa file này là thêm/bớt trạm, không phải build lại.
+DEVICES_FILE = os.path.join(DATA_DIR, "devices.json")
 # ~10 MB/ngày ở nhịp 2 Hz, nên 300 MB ≈ một tháng dữ liệu trên phân vùng 512 MB.
 TELEMETRY_MAX_MB = int(os.environ.get("HMI_TELEMETRY_MAX_MB", "300"))
 EVENT_MAX_MB = int(os.environ.get("HMI_EVENT_MAX_MB", "20"))
@@ -75,6 +77,9 @@ LOG_FLUSH_INTERVAL_S = float(os.environ.get("HMI_LOG_FLUSH_S", "30"))
 MQTT_QUEUE_MAX = int(os.environ.get("MQTT_QUEUE_MAX", "20000"))
 
 # --- Chu kỳ ---
+# Đọc tình trạng mạng mỗi NET_EVERY_N chu kỳ (~15 s): dò broker là một lần
+# bắt tay TCP, không đáng làm mỗi 0,5 giây.
+NET_EVERY_N = 30
 POLL_INTERVAL = 0.5
 AI_EVERY_N = 10
 TREND_POINTS = 240

@@ -35,6 +35,7 @@ class SettingsPage(QWidget):
         ]))
 
         self.model_card = self._info_card("MÔ HÌNH AI", [
+            ("Chế độ", "đang nạp artifact…"),
             ("Artifact", ARTIFACT_DIR),
             ("Phiên bản", "—"),
             ("Đặc trưng đầu vào", "—"),
@@ -81,9 +82,12 @@ class SettingsPage(QWidget):
         lay.addLayout(grid)
         return card
 
+    def update_ai_mode(self, description):
+        self.model_card._values[0].setText(description)
+
     def update_model_info(self, version, n_features, warning, critical):
         vals = self.model_card._values
-        vals[1].setText(str(version or "—"))
-        vals[2].setText(f"{n_features} đặc trưng" if n_features else "—")
-        vals[3].setText(f"{warning:.4f}" if warning is not None else "—")
-        vals[4].setText(f"{critical:.4f}" if critical is not None else "—")
+        vals[2].setText(str(version or "—"))
+        vals[3].setText(f"{n_features} đặc trưng" if n_features else "—")
+        vals[4].setText(f"{warning:.4f}" if warning is not None else "—")
+        vals[5].setText(f"{critical:.4f}" if critical is not None else "—")

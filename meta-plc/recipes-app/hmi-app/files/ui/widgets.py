@@ -281,18 +281,25 @@ class AlertRow(QFrame):
 
     ICONS = {"critical": "✕", "warning": "!", "info": "i", "resolved": "✓"}
 
-    def __init__(self, alert, compact=False, parent=None):
-        """compact=True: mô tả rút về một dòng.
+    def __init__(self, alert, compact=False, fade=0.0, parent=None):
+        """compact=True: mô tả rút về một dòng. fade: 0 = rõ, 1 = sắp biến mất.
 
         Thẻ tóm tắt ở trang Giám sát có chiều cao cố định; để mô tả nhiều dòng
         tự do ở đó thì hàng cảnh báo sẽ đẩy cả trang cao lên và tràn khỏi màn
         1024×600.
+
+        Việc mờ dần không phải để đẹp: nó cho biết dòng này SẮP tự biến mất,
+        nên người vận hành không đi tìm nút xoá và cũng không tưởng hệ thống
+        vừa quên mất một cảnh báo.
         """
         super().__init__(parent)
         self.setObjectName("Sunken")
         kind = "resolved" if alert.resolved_ts else alert.severity
-        color = {"critical": C["err"], "warning": C["warn"],
-                 "info": C["info"], "resolved": C["ok"]}[kind]
+        color = _blend({"critical": C["err"], "warning": C["warn"],
+                        "info": C["info"], "resolved": C["ok"]}[kind],
+                       C["panel"], fade)
+        text_color = _blend(C["text"], C["panel"], fade)
+        sub_color = _blend(C["dim"], C["panel"], fade)
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(12, 9, 12, 9)
@@ -306,19 +313,22 @@ class AlertRow(QFrame):
         mid = QVBoxLayout()
         mid.setSpacing(1)
         title = QLabel(alert.title)
-        title.setStyleSheet("font-size: 13px; font-weight: 700;")
+        title.setStyleSheet(
+            f"font-size: 13px; font-weight: 700; color: {text_color};")
         title.setWordWrap(not compact)
         mid.addWidget(title)
         if alert.detail:
             text = alert.detail.split("\n")[0] if compact else alert.detail
             det = QLabel(text)
-            det.setObjectName("CardSub")
+            det.setStyleSheet(
+                f"font-family: {MONO}; font-size: 11px; color: {sub_color};")
             det.setWordWrap(not compact)
             mid.addWidget(det)
 
         stamp = QLabel(time.strftime("%H:%M:%S", time.localtime(
             alert.resolved_ts or alert.ts)))
-        stamp.setObjectName("CardSub")
+        stamp.setStyleSheet(
+            f"font-family: {MONO}; font-size: 11px; color: {sub_color};")
         stamp.setAlignment(Qt.AlignTop | Qt.AlignRight)
 
         lay.addWidget(icon, alignment=Qt.AlignTop)
@@ -364,6 +374,24 @@ class NavBar(QFrame):
         base = btn.text().split("\n")
         label = base[1].split("  •")[0]
         btn.setText(f"{base[0]}\n{label}" + ("  •" if count else ""))
+
+
+def _blend(color, background, ratio):
+    """Trộn màu về phía nền theo tỉ lệ 0..1 — cách làm mờ rẻ nhất.
+
+    Dùng phép trộn màu thay vì QGraphicsOpacityEffect: hiệu ứng opacity của Qt
+    bắt widget vẽ qua một lớp đệm riêng, tốn hơn hẳn trên Pi 4 mà kết quả nhìn
+    y hệt trên nền phẳng một màu như thế này.
+    """
+    ratio = max(0.0, min(1.0, float(ratio)))
+    if ratio <= 0.0:
+        return color
+    c, b = QColor(color), QColor(background)
+    return QColor(
+        int(c.red() + (b.red() - c.red()) * ratio),
+        int(c.green() + (b.green() - c.green()) * ratio),
+        int(c.blue() + (b.blue() - c.blue()) * ratio),
+    ).name()
 
 
 def clear_layout(layout):

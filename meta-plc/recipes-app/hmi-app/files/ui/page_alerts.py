@@ -17,6 +17,9 @@ from PyQt5.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton,
 from ui.theme import C
 from ui.widgets import AlertRow, StatusPill, clear_layout
 
+# Nhật ký trên màn hình giữ 10 phút; lâu hơn thì tra trong /data/events.
+HISTORY_TTL_S = 600.0
+
 
 class AlertsPage(QWidget):
     apply_requested = pyqtSignal(int)     # tốc độ đề xuất được phê duyệt
@@ -128,15 +131,21 @@ class AlertsPage(QWidget):
     def update_alerts(self, engine):
         clear_layout(self.list_box)
 
-        active, history = engine.active, engine.history
+        # Nhật ký giữ lâu hơn thẻ tóm tắt (10 phút) vì đây là chỗ người ta mở
+        # ra để TRA lại; bản đầy đủ vẫn nằm trong /data/events/*.jsonl.
+        rows = engine.visible(24, expire_after_s=HISTORY_TTL_S)
+        active = engine.active
         self.lbl_count.setText(
-            f"{len(active)} đang mở · {len(history)} đã xử lý"
+            f"{len(active)} đang mở · {len(rows) - len(active)} đã xử lý"
             if active else "không có cảnh báo đang mở")
 
-        if not active and not history:
-            empty = QLabel("Chưa có sự kiện nào.")
+        if not rows:
+            empty = QLabel("Chưa có sự kiện nào — mọi thứ đang bình thường.")
             empty.setObjectName("CardSub")
             self.list_box.addWidget(empty)
-        for alert in active + history[:20]:
-            self.list_box.addWidget(AlertRow(alert))
+        for alert in rows:
+            self.list_box.addWidget(
+                AlertRow(alert, fade=engine.fade_ratio(
+                    alert, fade_after_s=HISTORY_TTL_S * 0.6,
+                    expire_after_s=HISTORY_TTL_S)))
         self.list_box.addStretch()

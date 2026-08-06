@@ -25,6 +25,13 @@ from collections import deque
 SEVERITY_ORDER = {"info": 0, "warning": 1, "critical": 2}
 HISTORY_LIMIT = 80
 
+# Cảnh báo ĐÃ XỬ LÝ thì mờ dần rồi biến mất khỏi màn hình. Một dòng "đã trở
+# lại bình thường" nằm lại mãi cũng vô dụng như dòng cảnh báo nằm lại mãi: sau
+# vài phút màn hình đầy những chuyện đã xong, người vận hành hết nhìn.
+# Bản đầy đủ vẫn nằm trong /data/events/*.jsonl, tra lại được bất cứ lúc nào.
+FADE_AFTER_S = 20.0        # quá tuổi này thì vẽ mờ
+EXPIRE_AFTER_S = 90.0      # quá tuổi này thì bỏ khỏi danh sách
+
 
 class Alert:
     __slots__ = ("key", "severity", "title", "detail", "ts", "resolved_ts",
@@ -125,6 +132,44 @@ class AlertEngine:
     def recent(self, n=6):
         """Cảnh báo đang mở + lịch sử, cắt lấy n dòng mới nhất để hiển thị."""
         return (self.active + self.history)[:n]
+
+    def visible(self, n=6, expire_after_s=EXPIRE_AFTER_S):
+        """Danh sách để VẼ: cảnh báo đang mở luôn có, đã xử lý thì hết hạn.
+
+        Cảnh báo đang mở không bao giờ bị ẩn dù cũ tới đâu — nó vẫn đang xảy
+        ra. Chỉ những dòng đã đóng mới rụng dần.
+        """
+        now = time.time()
+        rows = list(self.active)
+        for alert in self._history:
+            if alert.resolved_ts and now - alert.resolved_ts > expire_after_s:
+                continue
+            rows.append(alert)
+        return rows[:n]
+
+    def prune(self, expire_after_s=EXPIRE_AFTER_S):
+        """Bỏ hẳn khỏi lịch sử trong RAM. Trả True nếu có thay đổi."""
+        now = time.time()
+        keep = [a for a in self._history
+                if not (a.resolved_ts and now - a.resolved_ts > expire_after_s)]
+        if len(keep) == len(self._history):
+            return False
+        self._history.clear()
+        self._history.extend(keep)
+        self.revision += 1
+        return True
+
+    @staticmethod
+    def fade_ratio(alert, fade_after_s=FADE_AFTER_S,
+                   expire_after_s=EXPIRE_AFTER_S):
+        """0.0 = còn tươi, 1.0 = sắp biến mất. Dùng để vẽ mờ dần."""
+        if not alert.resolved_ts:
+            return 0.0
+        age = time.time() - alert.resolved_ts
+        if age <= fade_after_s:
+            return 0.0
+        span = max(expire_after_s - fade_after_s, 1e-6)
+        return max(0.0, min(1.0, (age - fade_after_s) / span))
 
     def get(self, key):
         return self._active.get(key)

@@ -13,29 +13,36 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMainWindow,
                              QStackedWidget, QVBoxLayout, QWidget)
 
-from config import APP_TITLE
+from config import APP_TITLE, MQTT_BROKER, MQTT_PORT
 from core.data_worker import DataWorker
 from core.data_logger import describe as describe_storage
 from core.plc_driver import speed_to_raw
 from services.alert_engine import AI_SUGGEST, AlertEngine, apply_advisory
 from ui.page_alerts import AlertsPage
 from ui.page_control import ControlPage
-from ui.page_devices import DevicesPage
+from ui.page_gateway import GatewayPage
 from ui.page_monitor import MonitorPage
 from ui.page_settings import SettingsPage
+from ui.page_stations import StationsPage
 from ui.page_trends import TrendsPage
 from ui.theme import C, QSS
 from ui.widgets import NavBar, StatusDot
 
 NAV_ITEMS = [
+    ("▤", "TRẠM"),
     ("◉", "GIÁM SÁT"),
     ("∿", "ĐỒ THỊ"),
     ("⇅", "ĐIỀU KHIỂN"),
     ("!", "CẢNH BÁO"),
-    ("⚙", "THIẾT BỊ"),
+    ("↑", "GATEWAY"),
     ("≡", "CÀI ĐẶT"),
 ]
-TAB_ALERTS = 3
+TAB_STATIONS = 0
+TAB_MONITOR = 1
+TAB_ALERTS = 4
+
+# Cảnh báo đã xử lý rụng dần khỏi màn hình; quét lại mỗi chừng này giây.
+PRUNE_INTERVAL_MS = 3000
 
 
 class HMIMainWindow(QMainWindow):
@@ -61,6 +68,12 @@ class HMIMainWindow(QMainWindow):
         self._clock.start(1000)
         self._tick_clock()
 
+        # Cảnh báo đã xử lý phải TỰ rụng kể cả khi không có sự kiện mới nào,
+        # nếu không thì dòng "đã trở lại bình thường" nằm lại tới sáng.
+        self._pruner = QTimer(self)
+        self._pruner.timeout.connect(self._prune_alerts)
+        self._pruner.start(PRUNE_INTERVAL_MS)
+
     # ------------------------------------------------------------------
     def _build_ui(self):
         root = QWidget(); root.setObjectName("Root")
@@ -72,14 +85,16 @@ class HMIMainWindow(QMainWindow):
         outer.addWidget(self._build_header())
 
         self.stack = QStackedWidget()
+        self.page_stations = StationsPage()
         self.page_monitor  = MonitorPage()
         self.page_trends   = TrendsPage()
         self.page_control  = ControlPage()
         self.page_alerts   = AlertsPage()
-        self.page_devices  = DevicesPage()
+        self.page_gateway  = GatewayPage()
         self.page_settings = SettingsPage()
-        for p in (self.page_monitor, self.page_trends, self.page_control,
-                  self.page_alerts, self.page_devices, self.page_settings):
+        for p in (self.page_stations, self.page_monitor, self.page_trends,
+                  self.page_control, self.page_alerts, self.page_gateway,
+                  self.page_settings):
             self.stack.addWidget(p)
         outer.addWidget(self.stack, stretch=1)
 
@@ -96,6 +111,7 @@ class HMIMainWindow(QMainWindow):
         self.nav.switched.connect(self.stack.setCurrentIndex)
         outer.addWidget(self.nav)
 
+        self.page_stations.station_selected.connect(self._select_station)
         self.page_control.write_requested.connect(self._manual_write)
         self.page_alerts.apply_requested.connect(self._apply_ai)
         self.page_alerts.dismiss_requested.connect(self._dismiss_ai)
@@ -140,6 +156,8 @@ class HMIMainWindow(QMainWindow):
         self.worker.data_lost.connect(self._on_data_lost)
         self.worker.command_update.connect(self.page_control.show_command)
         self.worker.ai_ready.connect(self._on_ai_ready)
+        self.worker.network_update.connect(self._on_network)
+        self.worker.station_changed.connect(self._on_station_changed)
         self.worker.status_update.connect(self._on_status)
         self.worker.link_update.connect(self._on_links)
         self.worker.start()
@@ -152,6 +170,7 @@ class HMIMainWindow(QMainWindow):
         self.page_monitor.update_telemetry(d)
         self.page_trends.update_telemetry(d)
         self.page_control.update_telemetry(d)
+        self.page_stations.update_telemetry(self.worker.station.id, d)
 
     def _on_advisory(self, advisory, view):
         apply_advisory(self.alerts, view)
@@ -172,7 +191,7 @@ class HMIMainWindow(QMainWindow):
         self._refresh_alerts()
 
     def _on_ai_ready(self, info):
-        self.page_devices.update_ai_mode(info.get("description", "—"))
+        self.page_settings.update_ai_mode(info.get("description", "—"))
         self.page_settings.update_model_info(
             info.get("version"), info.get("n_features"),
             info.get("warning_threshold"), info.get("critical_threshold"))
@@ -186,8 +205,29 @@ class HMIMainWindow(QMainWindow):
     def _on_status(self, msg):
         self.lbl_status.setText(time.strftime("[%H:%M:%S]  ") + msg)
 
+    def _on_network(self, info):
+        self.page_gateway.update_network(info)
+        self.page_gateway.update_uplink(
+            MQTT_BROKER, MQTT_PORT, info.get("mqtt_connected"),
+            info.get("broker_reachable"), info.get("mqtt_sent", 0),
+            info.get("mqtt_queued", 0), info.get("mqtt_dropped", 0))
+
+    def _on_station_changed(self, station_id):
+        self.page_stations.update_registry(self.worker.registry, self._links)
+        self.page_gateway.update_devices(self.worker.registry, self._links)
+        station = self.worker.registry.get(station_id)
+        if station:
+            self.alerts.log("info", f"Chuyển sang trạm {station.name}",
+                            f"{station.summary}")
+            self._refresh_alerts()
+
+    def _select_station(self, station_id):
+        if self.worker.select_station(station_id):
+            self.nav.select(TAB_MONITOR)          # chọn xong là vào xem luôn
+
     def _on_links(self, links):
-        self.page_devices.update_links(links)
+        self.page_stations.update_registry(self.worker.registry, links)
+        self.page_gateway.update_devices(self.worker.registry, links)
         for key, dot in self.dots.items():
             dot.set_state("ok" if links.get(key) else "err")
 
@@ -227,7 +267,7 @@ class HMIMainWindow(QMainWindow):
         queued = getattr(self.worker.mqtt, "queued", 0)
         if queued:
             text += f" · {queued} gói MQTT đang chờ gửi bù"
-        self.page_devices.update_storage(state, text)
+        self.page_gateway.update_storage(state, text)
 
         # Ghi hỏng là mất dữ liệu vận hành — phải báo, không nuốt im.
         if state == "err":
@@ -236,6 +276,13 @@ class HMIMainWindow(QMainWindow):
                                     telemetry_log.error or "")
         else:
             self.alerts.clear("storage", title="Đã ghi dữ liệu trở lại")
+
+    def _prune_alerts(self):
+        if self.alerts.prune():
+            self._refresh_alerts()
+        else:
+            # Không có gì hết hạn, nhưng độ mờ vẫn tăng theo thời gian.
+            self.page_monitor.update_alerts(self.alerts)
 
     def _refresh_alerts(self):
         self.page_monitor.update_alerts(self.alerts)

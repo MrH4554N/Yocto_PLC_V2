@@ -47,6 +47,7 @@ class MqttPublisher:
         # RAM. 20 000 gói ở nhịp 2 Hz ≈ 2,8 giờ mất mạng vẫn gửi bù đủ.
         self._queue = deque(maxlen=MQTT_QUEUE_MAX)
         self.dropped = 0
+        self.sent = 0
 
         # Tương thích cả paho-mqtt 1.x và 2.x
         try:
@@ -92,6 +93,7 @@ class MqttPublisher:
             return False
         try:
             self._client.publish(topic, json.dumps(payload, ensure_ascii=False), qos=0)
+            self.sent += 1
             return True
         except Exception:
             return False

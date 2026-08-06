@@ -11,13 +11,19 @@ Vòng lặp mỗi chu kỳ:
     mỗi AI_EVERY_N chu kỳ: chạy suy luận -> phát đề xuất
 """
 
+import os
 import time
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from config import (AI_EVERY_N, EVENT_DIR, EVENT_MAX_MB, LOG_FLUSH_INTERVAL_S,
-                    POLL_INTERVAL, TELEMETRY_DIR, TELEMETRY_MAX_MB)
+from config import (ADDR_D120_SPEED, ADDR_D8116_CMD, AI_EVERY_N, DEVICES_FILE,
+                    EVENT_DIR, EVENT_MAX_MB, LOG_FLUSH_INTERVAL_S,
+                    MQTT_BROKER, MQTT_PORT, NET_EVERY_N, PLC_BAUDRATE,
+                    PLC_PORT, PLC_SLAVE, POLL_INTERVAL, TELEMETRY_DIR,
+                    TELEMETRY_MAX_MB)
 from core.data_logger import EventLogger, TelemetryLogger
+from core.device_registry import DeviceRegistry
+from core import net_info
 from core.ina_sensor import INASensor
 from core.mqtt_publisher import MqttPublisher
 from core.plc_driver import PLCDriver, raw_to_speed, speed_to_raw
@@ -34,6 +40,8 @@ class DataWorker(QThread):
     data_lost = pyqtSignal(str)                # thiếu đầu vào — nói rõ thiếu gì
     command_update = pyqtSignal(object)        # giá trị thô D8116 (None nếu chưa đọc được)
     ai_ready = pyqtSignal(dict)                # thông tin model sau khi nạp artifact
+    network_update = pyqtSignal(dict)          # tình trạng mạng/gateway
+    station_changed = pyqtSignal(str)          # id trạm đang giám sát
     status_update = pyqtSignal(str)            # thông báo sự kiện cho statusbar
     link_update = pyqtSignal(dict)             # trạng thái kết nối các khối
 
@@ -47,15 +55,25 @@ class DataWorker(QThread):
         # chưa đọc được: AI sẽ chạy chế độ suy giảm (suy từ điện áp).
         self.cmd_register = None
 
-        self.plc = PLCDriver()
+        # Danh sách trạm nằm trên /data nên đổi trạm không cần build lại image.
+        self.registry = DeviceRegistry(DEVICES_FILE, {
+            "port": PLC_PORT, "baudrate": PLC_BAUDRATE, "slave": PLC_SLAVE,
+            "addr_speed": ADDR_D120_SPEED, "addr_cmd": ADDR_D8116_CMD})
+        self.station = self.registry.selected
+        self._switch_to = None
+
+        self.plc = PLCDriver.from_station(self.station)
         self.ina = INASensor()
         self.mqtt = MqttPublisher()
         self.ai = AIService()
 
         # Ghi xuống /data: nguồn dữ liệu DUY NHẤT sống sót qua reboot và qua
         # mất mạng. Cũng là nguồn để thu thêm dữ liệu train lại model sau này.
+        # Mỗi trạm một thư mục: gộp chung file thì dữ liệu hai băng tải khác
+        # nhau nằm lẫn lộn và không train lại được cho trạm nào cả.
         self.telemetry_log = TelemetryLogger(
-            TELEMETRY_DIR, max_bytes=TELEMETRY_MAX_MB * _MB,
+            os.path.join(TELEMETRY_DIR, self.station.id),
+            max_bytes=TELEMETRY_MAX_MB * _MB,
             flush_interval_s=LOG_FLUSH_INTERVAL_S)
         self.event_log = EventLogger(EVENT_DIR, max_bytes=EVENT_MAX_MB * _MB)
 
@@ -99,8 +117,21 @@ class DataWorker(QThread):
 
         self.link_update.emit(dict(self.links))
 
+        net_counter = NET_EVERY_N          # đọc ngay ở vòng đầu
+
         while self.is_running:
             speed, voltage, current, power = 0, 0.0, 0.0, 0.0
+
+            # Đổi trạm được yêu cầu từ giao diện: làm ở ĐẦU vòng, trong luồng
+            # nền, để không đóng cổng nối tiếp ngay giữa lúc đang đọc nó.
+            if self._switch_to is not None:
+                self._apply_station(self._switch_to)
+                self._switch_to = None
+
+            net_counter += 1
+            if net_counter >= NET_EVERY_N:
+                net_counter = 0
+                self.network_update.emit(self._network_snapshot())
 
             if not self.links["plc"]:
                 self.links["plc"] = self.plc.connect()
@@ -175,6 +206,49 @@ class DataWorker(QThread):
             time.sleep(POLL_INTERVAL)
 
     # ------------------------------------------------------------------
+    def select_station(self, station_id):
+        """Yêu cầu đổi trạm. Gọi từ luồng giao diện; vòng nền tự áp dụng."""
+        if self.registry.get(station_id) is None or station_id == self.station.id:
+            return False
+        self._switch_to = station_id
+        return True
+
+    def _apply_station(self, station_id):
+        station = self.registry.get(station_id)
+        if station is None:
+            return
+        self.plc.close()
+        self.registry.select(station_id)
+        self.station = station
+        self.plc = PLCDriver.from_station(station)
+        self.cmd_register = None
+
+        # Đổi trạm là đổi hẳn nguồn dữ liệu: cửa sổ AI và bộ lọc dòng đang giữ
+        # lịch sử của trạm cũ, để nguyên thì mẫu của hai máy dính vào nhau
+        # thành một bước nhảy không có thật.
+        self.ai.reset_window()
+        self.telemetry_log.close()
+        self.telemetry_log = TelemetryLogger(
+            os.path.join(TELEMETRY_DIR, station.id),
+            max_bytes=TELEMETRY_MAX_MB * _MB,
+            flush_interval_s=LOG_FLUSH_INTERVAL_S)
+
+        self.links["plc"] = self.plc.connect()
+        self.cmd_register = self.plc.read_command_register()
+        self.command_update.emit(self.cmd_register)
+        self.link_update.emit(dict(self.links))
+        self.station_changed.emit(station.id)
+        self.status_update.emit(f"Đã chuyển sang trạm {station.name} "
+                                f"({station.port}).")
+
+    def _network_snapshot(self):
+        info = net_info.collect(MQTT_BROKER, MQTT_PORT)
+        info["mqtt_connected"] = self.mqtt.connected
+        info["mqtt_queued"] = self.mqtt.queued
+        info["mqtt_dropped"] = self.mqtt.dropped
+        info["mqtt_sent"] = getattr(self.mqtt, "sent", 0)
+        return info
+
     def _run_advisory(self):
         """Một chu kỳ suy luận: phát kết quả ra UI và lưu vết lên MQTT."""
         result = self.ai.advise()

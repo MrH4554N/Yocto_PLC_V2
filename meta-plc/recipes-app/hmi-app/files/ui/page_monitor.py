@@ -89,7 +89,7 @@ class MonitorPage(QWidget):
         lay.setSpacing(6)
 
         head = QHBoxLayout()
-        t = QLabel("TRỢ LÝ AI"); t.setObjectName("CardTitle")
+        t = QLabel("STATE ALERT"); t.setObjectName("CardTitle")
         self.pill_ai = StatusPill("ĐANG KHỞI ĐỘNG")
         head.addWidget(t)
         head.addStretch()
@@ -175,7 +175,8 @@ class MonitorPage(QWidget):
         self.lbl_ai_sub.setText(f"[{time.strftime('%H:%M:%S')}]  {view.get('detail', '')}")
 
     def update_alerts(self, engine):
-        """Vẽ lại 3 dòng cảnh báo gần nhất."""
+        """Vẽ lại 3 dòng gần nhất; dòng đã xử lý mờ dần rồi tự biến mất."""
         clear_layout(self.alert_box)
-        for alert in engine.recent(3):
-            self.alert_box.addWidget(AlertRow(alert, compact=True))
+        for alert in engine.visible(3):
+            self.alert_box.addWidget(
+                AlertRow(alert, compact=True, fade=engine.fade_ratio(alert)))
