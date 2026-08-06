@@ -60,12 +60,16 @@ class DataWorker(QThread):
         # Nạp artifact AI (mất vài trăm ms — làm trong luồng nền để giao diện
         # hiện lên ngay chứ không đứng hình lúc khởi động).
         self.links["ai"] = self.ai.load()
+        # In ra stdout để journalctl -u hmi-app còn giữ được lý do: statusbar
+        # chỉ hiện một dòng rồi bị dòng sau đè mất.
+        print(f"[AI] mode={self.ai.mode} artifact={self.ai.artifact_version} "
+              f"error={self.ai.error}")
         if not self.links["ai"]:
             self.status_update.emit(f"AI không sẵn sàng: {self.ai.error}")
         elif self.ai.mode == "anomaly_only":
             self.status_update.emit(
-                "AI chạy chế độ rút gọn: chỉ cảnh báo bất thường, "
-                "không đề xuất setpoint.")
+                "AI chạy chế độ rút gọn (chỉ cảnh báo bất thường, không đề "
+                f"xuất setpoint) — {self.ai.error}")
 
         # Lấy lệnh PLC đang giữ để AI không hiểu nhầm là sai số bám lớn.
         self.cmd_register = self.plc.read_command_register()
@@ -158,6 +162,27 @@ class DataWorker(QThread):
             self.suggestion_ready.emit(view["text"], int(view["speed"]))
         else:
             self.advisory_status.emit(view["state"], view["text"], view["detail"])
+
+        # Nhịp sống: mỗi chu kỳ AI in một dòng lên statusbar KỂ CẢ khi mọi thứ
+        # bình thường. Chỉ báo lúc có sự cố thì người vận hành không thể phân
+        # biệt "AI đang canh và thấy ổn" với "AI đã chết từ lúc nào".
+        self.status_update.emit(self._heartbeat_text(view))
+
+    @staticmethod
+    def _heartbeat_text(view):
+        score = view.get("score")
+        level = view.get("level")
+        labels = {"normal": "bình thường", "warning": "chớm bất thường",
+                  "critical": "BẤT THƯỜNG NẶNG", "warmup": "đang thu thập dữ liệu",
+                  "unknown": "chưa chấm điểm được"}
+        txt = "AI: " + labels.get(level, str(level))
+        if score is not None:
+            txt += f" — điểm {score:.3f}"
+        if view["state"] == "suggest":
+            txt += " — có đề xuất chờ phê duyệt"
+        elif view["state"] == "blocked":
+            txt += " — đã chặn đề xuất"
+        return txt
 
     def _emit_no_data(self):
         """Thiếu dữ liệu đầu vào — nói rõ thiếu cái gì thay vì đoán bừa."""

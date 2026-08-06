@@ -243,7 +243,10 @@ class IHCSAdvisor:
             self.error = f"MPC không nạp được ({type(e).__name__}: {e}) — chạy chế độ chỉ phát hiện bất thường"
 
         try:
-            self._engine = _AnomalyOnlyEngine(loader)
+            # Truyền nguyên văn lý do MPC hỏng xuống engine rút gọn: nếu không,
+            # advisory chỉ nói "mpc_unavailable" và giao diện buộc phải đoán —
+            # thiếu thư viện, sai artifact hay lỗi cấu hình đều hiện như nhau.
+            self._engine = _AnomalyOnlyEngine(loader, reason=self.error)
             self._engine.load()
             self.mode = "anomaly_only"
             return True
@@ -288,9 +291,10 @@ class _AnomalyOnlyEngine:
     format_advisory() không cần biết đang chạy chế độ nào.
     """
 
-    def __init__(self, loader):
+    def __init__(self, loader, reason=None):
         self._loader = loader
         self._manifest = loader.manifest
+        self._reason = reason
         self._features = []
         self._mean = None
         self._scale = None
@@ -405,6 +409,7 @@ class _AnomalyOnlyEngine:
             "model_evidence": {
                 "mpc_controller_version": self._manifest.get("artifact_version", "unknown"),
                 "mpc_solver_status": "unavailable",
+                "mpc_unavailable_reason": self._reason,
                 "lstm_anomaly_score": (round(anomaly_score, 6)
                                        if anomaly_score is not None else None),
                 "anomaly_threshold": warning,
@@ -446,10 +451,12 @@ def format_advisory(advisory, speed_max=980, min_delta_rpm=1.0):
     """Đổi advisory JSON thành thứ HMI hiển thị được.
 
     Trả về dict:
-      state  — "suggest" (cần phê duyệt) | "normal" | "blocked"
+      state  — "suggest" (cần phê duyệt) | "normal" | "warmup" | "blocked"
       text   — nội dung chính
       detail — dòng phụ (điểm bất thường, độ tin cậy, trạng thái solver)
       speed  — setpoint đề xuất đã làm tròn/kẹp biên, None nếu không có
+      level  — mức bất thường: normal/warning/critical/warmup/unknown
+      score  — điểm bất thường thô, None khi chưa chấm được
     """
     rec = advisory.get("recommendation", {})
     ev = advisory.get("model_evidence", {})
@@ -470,8 +477,12 @@ def format_advisory(advisory, speed_max=980, min_delta_rpm=1.0):
     block_reason = rec.get("block_reason")
     if block_reason:
         if block_reason == "mpc_unavailable":
-            text = ("Chưa chạy được bộ tối ưu MPC (image thiếu osqp/scipy).\n"
-                    "AI chỉ giám sát bất thường, không đề xuất setpoint.")
+            # Nói đúng lý do đo được, không đoán: engine rút gọn chạy cả khi
+            # thiếu thư viện lẫn khi artifact/cấu hình sai, và hai thứ đó cần
+            # hai cách xử lý hoàn toàn khác nhau.
+            reason = ev.get("mpc_unavailable_reason") or "chưa rõ nguyên nhân"
+            text = ("Chưa chạy được bộ tối ưu MPC — AI chỉ giám sát bất "
+                    f"thường, không đề xuất setpoint.\nLý do: {reason}")
         elif block_reason.startswith("anomaly_score"):
             text = ("CẢNH BÁO: dữ liệu vận hành lệch xa vùng bình thường.\n"
                     "AI chặn mọi đề xuất — kiểm tra băng tải, tải trọng và nguồn điện.")
@@ -479,14 +490,15 @@ def format_advisory(advisory, speed_max=980, min_delta_rpm=1.0):
             text = ("Không tạo được đề xuất an toàn ở chu kỳ này.\n"
                     f"Lý do: {block_reason}")
         return {"state": "blocked", "text": text,
-                "detail": f"{score_txt}   •   {block_reason}", "speed": None}
+                "detail": f"{score_txt}   •   {block_reason}",
+                "speed": None, "level": level, "score": score}
 
     setpoint = rec.get("recommended_setpoint_rpm")
     delta = rec.get("recommended_delta_setpoint_rpm") or 0.0
     if setpoint is None:
         return {"state": "blocked",
                 "text": "Không có đề xuất ở chu kỳ này.",
-                "detail": score_txt, "speed": None}
+                "detail": score_txt, "speed": None, "level": level, "score": score}
 
     speed = int(round(max(0.0, min(float(speed_max), float(setpoint)))))
     confidence = rec.get("confidence")
@@ -494,18 +506,28 @@ def format_advisory(advisory, speed_max=980, min_delta_rpm=1.0):
     solver = ev.get("mpc_solver_status", "?")
     detail = f"{score_txt}   •   {conf_txt}   •   MPC: {solver}"
 
+    # Chưa đủ cửa sổ thì LSTM chưa giám sát được gì. MPC vẫn giải ra số, nhưng
+    # mời người vận hành phê duyệt một đề xuất KHÔNG có lớp giám sát bất thường
+    # đứng sau là bán một sự bảo đảm không tồn tại — nói thẳng đang khởi động.
+    if level == "warmup":
+        return {"state": "warmup",
+                "text": (f"AI đang thu thập dữ liệu vận hành (còn {warmup} mẫu, "
+                         f"~{warmup} giây).\nChưa chấm được điểm bất thường nên "
+                         f"chưa đưa đề xuất nào để phê duyệt."),
+                "detail": detail, "speed": None, "level": level, "score": score}
+
     if abs(delta) < min_delta_rpm:
-        warn_txt = {"normal": "", "warmup": "  (AI còn đang thu thập dữ liệu)"}.get(
-            level, "  (đang có dấu hiệu bất thường)")
+        warn_txt = "" if level == "normal" else "  (đang có dấu hiệu bất thường)"
         return {"state": "normal",
                 "text": f"Hệ thống đang chạy đúng vùng tối ưu — giữ nguyên "
                         f"setpoint {speed}.{warn_txt}",
-                "detail": detail, "speed": speed}
+                "detail": detail, "speed": speed, "level": level, "score": score}
 
     huong = "tăng" if delta > 0 else "giảm"
     text = (f"Đề xuất {huong} setpoint về {speed} (Δ {delta:+.1f}) "
             f"để bám tốc độ mục tiêu mà vẫn giữ dòng điện trong giới hạn.")
-    return {"state": "suggest", "text": text, "detail": detail, "speed": speed}
+    return {"state": "suggest", "text": text, "detail": detail, "speed": speed,
+            "level": level, "score": score}
 
 
 def find_artifact_dir():

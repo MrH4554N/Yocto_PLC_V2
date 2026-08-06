@@ -176,9 +176,11 @@ class HMIMainWindow(QMainWindow):
         if state == "blocked":
             self.page_ai.show_blocked(text, detail)
             self._on_status("AI chặn đề xuất — xem trang Trợ lý AI.")
+        elif state == "warmup":
+            self.page_ai.show_collecting(text, detail)
         else:
             self.page_ai.show_normal(text, detail)
-        self.page_overview.show_advisory(state, text)
+        self.page_overview.show_advisory(state, text, detail)
 
     def _on_status(self, msg):
         self.lbl_status.setText(time.strftime("[%H:%M:%S] ") + msg)

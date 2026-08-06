@@ -114,6 +114,14 @@ class AIPage(QWidget):
         self._set_buttons(False)
         self._set_banner("normal")
 
+    def show_collecting(self, text, detail=None):
+        """Chưa đủ cửa sổ dữ liệu: model bất thường chưa chấm điểm được."""
+        self.current_speed = 0
+        self.lbl_suggestion.setText(text)
+        self.lbl_detail.setText(detail or " ")
+        self._set_buttons(False)
+        self._set_banner("collect")
+
     def show_blocked(self, text, detail=None):
         """AI chặn đề xuất: bất thường vượt ngưỡng hoặc MPC không giải được."""
         self.current_speed = 0

@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """Trang 1 — Tổng quan: thẻ KPI + sparkline tốc độ + tóm tắt AI."""
 
+import time
 from collections import deque
 
 from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
@@ -54,11 +55,17 @@ class OverviewPage(QWidget):
         self.ai_text = QLabel("Chưa có đề xuất.")
         self.ai_text.setWordWrap(True)
         self.ai_text.setStyleSheet("font-size: 14px;")
+        # Dòng điểm bất thường + thời điểm chu kỳ AI gần nhất. Không có nó thì
+        # trạng thái bình thường trông y hệt lúc AI đã chết.
+        self.ai_detail = QLabel(" ")
+        self.ai_detail.setObjectName("CardSub")
+        self.ai_detail.setWordWrap(True)
         self.lbl_setpoint = QLabel("Setpoint đã ghi: --")
         self.lbl_setpoint.setObjectName("CardSub")
         al.addWidget(t2)
         al.addWidget(self.ai_state, alignment=Qt.AlignLeft)
         al.addWidget(self.ai_text)
+        al.addWidget(self.ai_detail)
         al.addStretch()
         al.addWidget(self.lbl_setpoint)
         bottom.addWidget(ai_card, stretch=2)
@@ -75,18 +82,27 @@ class OverviewPage(QWidget):
         self._speed_buf.append(d["speed"])
         self.spark_curve.setData(list(self._speed_buf))
 
-    def show_suggestion(self, text):
+    def show_suggestion(self, text, detail=None):
         self.ai_state.set_state("warn", "CÓ ĐỀ XUẤT MỚI")
         self.ai_text.setText(text + "\n→ Vào trang Trợ lý AI để áp dụng.")
+        self._set_detail(detail)
 
-    def show_advisory(self, state, text):
-        """Cập nhật khi AI không có đề xuất: đang bình thường hoặc bị chặn."""
+    def show_advisory(self, state, text, detail=None):
+        """Cập nhật khi AI không có đề xuất: bình thường / khởi động / bị chặn."""
         if state == "blocked":
             self.ai_state.set_state("err", "CẢNH BÁO — ĐÃ CHẶN ĐỀ XUẤT")
+        elif state == "warmup":
+            self.ai_state.set_state("warn", "ĐANG THU THẬP DỮ LIỆU")
         else:
             self.ai_state.set_state("ok", "VẬN HÀNH BÌNH THƯỜNG")
         self.ai_text.setText(text)
+        self._set_detail(detail)
 
     def show_applied(self, speed):
         self.ai_state.set_state("ok", "ĐÃ ÁP DỤNG")
         self.lbl_setpoint.setText(f"Setpoint đã ghi: {speed}")
+
+    def _set_detail(self, detail):
+        """Ghi kèm giờ của chu kỳ AI: đó là bằng chứng AI vẫn còn chạy."""
+        stamp = time.strftime("%H:%M:%S")
+        self.ai_detail.setText(f"[{stamp}]  {detail}" if detail else f"[{stamp}]")

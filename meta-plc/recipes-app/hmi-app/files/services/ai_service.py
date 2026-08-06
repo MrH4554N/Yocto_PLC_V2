@@ -35,12 +35,16 @@ class AIService:
         """Một dòng mô tả trạng thái AI cho trang Hệ thống."""
         labels = {
             "full": "LSTM cảnh báo + MPC đề xuất setpoint",
-            "anomaly_only": "chỉ cảnh báo bất thường (thiếu osqp/scipy)",
+            "anomaly_only": "chỉ cảnh báo bất thường (MPC không chạy được)",
             "unavailable": "không nạp được artifact",
         }
         text = labels.get(self.mode, self.mode)
         if self.artifact_version:
             text += f" — artifact {self.artifact_version}"
+        # Chế độ rút gọn/không chạy được thì lý do quan trọng hơn cái nhãn:
+        # thiếu thư viện và sai artifact nhìn giống hệt nhau nếu không in ra.
+        if self.mode != "full" and self.error:
+            text += f"\n{self.error}"
         return text
 
     # ------------------------------------------------------------------
