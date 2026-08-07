@@ -39,13 +39,15 @@ from ui.widgets import NavBar, StatusDot
 
 # Thanh tab của TẦNG 2. Màn chọn hệ thống nằm ngoài danh sách này: nó là
 # stack index 0, còn nav index i ứng với stack index i + 1.
+# Chỉ có nhãn chữ, KHÔNG có biểu tượng: image Yocto không cài gói font nào
+# có bộ Dingbats/mũi tên, các ký tự đó hiện ra ô vuông rỗng trên máy thật.
 NAV_ITEMS = [
-    ("◉", "GIÁM SÁT"),
-    ("∿", "ĐỒ THỊ"),
-    ("⇅", "ĐIỀU KHIỂN"),
-    ("!", "CẢNH BÁO"),
-    ("↑", "GATEWAY"),
-    ("≡", "CÀI ĐẶT"),
+    ("", "GIÁM SÁT"),
+    ("", "ĐỒ THỊ"),
+    ("", "ĐIỀU KHIỂN"),
+    ("", "CẢNH BÁO"),
+    ("", "GATEWAY"),
+    ("", "CÀI ĐẶT"),
 ]
 PAGE_PICKER = 0
 NAV_MONITOR = 0
@@ -139,14 +141,15 @@ class HMIMainWindow(QMainWindow):
 
         # Nút quay lại chỉ hiện khi đang ở trong một hệ thống — ở màn chọn thì
         # không có gì để quay về.
-        self.btn_back = QPushButton("←")
+        self.btn_back = QPushButton("QUAY LẠI")
         self.btn_back.setObjectName("Chip")
-        self.btn_back.setFixedSize(44, 32)
+        self.btn_back.setFixedSize(96, 32)
         self.btn_back.clicked.connect(self._show_picker)
         self.btn_back.hide()
 
-        mark = QLabel("◉")
-        mark.setStyleSheet(f"color: {C['volt']}; font-size: 17px;")
+        mark = QLabel()
+        mark.setFixedSize(12, 12)
+        mark.setStyleSheet(f"background-color: {C['volt']}; border-radius: 6px;")
         brand = QVBoxLayout(); brand.setSpacing(0)
         self.lbl_brand = QLabel("BĂNG TẢI THÔNG MINH")
         self.lbl_brand.setObjectName("Brand")

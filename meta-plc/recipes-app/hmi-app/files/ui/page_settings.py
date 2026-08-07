@@ -45,7 +45,7 @@ class SettingsPage(QWidget):
         root.addWidget(self.model_card)
         root.addStretch()
 
-        btn = QPushButton("✖  THOÁT ỨNG DỤNG")
+        btn = QPushButton("THOÁT ỨNG DỤNG")
         btn.setObjectName("Ghost")
         btn.setStyleSheet(f"color: {C['err']};")
         btn.setMinimumHeight(44)

@@ -143,11 +143,12 @@ class GatewayPage(QWidget):
             selected = station.id == registry.selected_id
             ok = selected and bool(links.get("plc"))
             row = QHBoxLayout(); row.setSpacing(8)
-            dot = QLabel("●")
-            dot.setFixedWidth(14)
+            dot = QLabel()
+            dot.setFixedSize(9, 9)
             dot.setStyleSheet(
-                f"color: {C['ok'] if ok else (C['err'] if selected else C['dim'])};"
-                f"font-size: 12px;")
+                f"background-color: "
+                f"{C['ok'] if ok else (C['err'] if selected else C['dim'])};"
+                f"border-radius: 4px;")
             name = QLabel(station.name)
             name.setStyleSheet("font-size: 13px; font-weight: 600;")
             state = QLabel("đang giám sát" if selected else "chờ")

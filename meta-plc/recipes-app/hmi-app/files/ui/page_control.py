@@ -81,7 +81,7 @@ class ControlPage(QWidget):
         arow = QHBoxLayout(); arow.setSpacing(10)
         self.btn_write = QPushButton("GHI XUỐNG PLC")
         self.btn_write.setObjectName("Primary")
-        self.btn_stop = QPushButton("■  DỪNG BĂNG TẢI")
+        self.btn_stop = QPushButton("DỪNG BĂNG TẢI")
         self.btn_stop.setObjectName("Danger")
         arow.addWidget(self.btn_write, stretch=2)
         arow.addWidget(self.btn_stop, stretch=1)
@@ -124,7 +124,7 @@ class ControlPage(QWidget):
     # ------------------------------------------------------------------
     def _raw_text(self, speed):
         raw = speed_to_raw(speed)
-        return f"→ D8116 = {raw}  (≈ {raw_to_speed(raw):.0f} rpm thực tế)"
+        return f"D8116 = {raw}   (~{raw_to_speed(raw):.0f} rpm thực tế)"
 
     def _sync_from_spin(self, v):
         self.slider.blockSignals(True)

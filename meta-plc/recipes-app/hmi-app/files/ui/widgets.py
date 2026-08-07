@@ -33,10 +33,15 @@ class Sparkline(QWidget):
     một vệt răng cưa vô nghĩa.
     """
 
-    def __init__(self, color, window_s=120.0, parent=None):
+    def __init__(self, color, window_s=120.0, min_span=0.0, parent=None):
         super().__init__(parent)
         self.color = QColor(color)
         self.window_s = float(window_s)
+        # Biên độ TỐI THIỂU của trục đứng. Không có nó thì khi tín hiệu gần
+        # như đứng yên (điện áp 0,0-0,1 V lúc máy tắt), trục tự co lại đúng
+        # bằng dải nhiễu và một dao động 0,05 V bị phóng lên full khung —
+        # nhìn như máy đang giật đùng đùng trong khi nó đang nằm im.
+        self.min_span = float(min_span)
         self._pts = deque()          # (ts, value)
         self.setMinimumHeight(46)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -62,15 +67,15 @@ class Sparkline(QWidget):
         ts = [p[0] for p in self._pts]
         vs = [p[1] for p in self._pts]
         t0, t1 = ts[0], ts[-1]
-        span = max(t1 - t0, 1e-6)
+        tspan = max(t1 - t0, 1e-6)
+
         vmin, vmax = min(vs), max(vs)
-        # Tín hiệu phẳng vẫn phải nằm giữa khung, không dính đáy.
-        if vmax - vmin < 1e-9:
-            vmin, vmax = vmin - 1.0, vmax + 1.0
-        vspan = vmax - vmin
+        vspan = max(vmax - vmin, self.min_span, 1e-9)
+        mid = (vmax + vmin) / 2.0
+        vmin, vmax = mid - vspan / 2.0, mid + vspan / 2.0
 
         def xy(t, v):
-            x = (t - t0) / span * (w - 2 * pad) + pad
+            x = (t - t0) / tspan * (w - 2 * pad) + pad
             y = h - pad - (v - vmin) / vspan * (h - 2 * pad)
             return QPointF(x, y)
 
@@ -104,7 +109,8 @@ class Sparkline(QWidget):
 class MetricCard(QFrame):
     """Thẻ KPI: nhãn — giá trị lớn + đơn vị — dòng phụ — sparkline."""
 
-    def __init__(self, title, unit, color, fmt="{:.1f}", parent=None):
+    def __init__(self, title, unit, color, fmt="{:.1f}", min_span=0.0,
+                 parent=None):
         super().__init__(parent)
         self.setObjectName("Card")
         self.fmt = fmt
@@ -132,7 +138,7 @@ class MetricCard(QFrame):
         self.lbl_sub = QLabel(" ")
         self.lbl_sub.setObjectName("CardSub")
 
-        self.spark = Sparkline(color)
+        self.spark = Sparkline(color, min_span=min_span)
 
         lay.addWidget(self.lbl_title)
         lay.addLayout(row)
@@ -236,8 +242,10 @@ class StatusDot(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
-        self._dot = QLabel("●")
-        self._dot.setStyleSheet(f"color: {C['dim']}; font-size: 13px;")
+        self._dot = QLabel()
+        self._dot.setFixedSize(9, 9)
+        self._dot.setStyleSheet(
+            f"background-color: {C['dim']}; border-radius: 4px;")
         self._txt = QLabel(text)
         self._txt.setStyleSheet(f"color: {C['muted']}; font-size: 12px; font-weight: 700;")
         lay.addWidget(self._dot)
@@ -245,7 +253,8 @@ class StatusDot(QWidget):
 
     def set_state(self, state):
         self._dot.setStyleSheet(
-            f"color: {self.COLORS.get(state, C['dim'])}; font-size: 13px;")
+            f"background-color: {self.COLORS.get(state, C['dim'])};"
+            f"border-radius: 4px;")
 
 
 class StatusPill(QLabel):
@@ -279,7 +288,6 @@ class StatusPill(QLabel):
 class AlertRow(QFrame):
     """Một mục trong danh sách cảnh báo: vạch màu | tiêu đề + mô tả | giờ."""
 
-    ICONS = {"critical": "✕", "warning": "!", "info": "i", "resolved": "✓"}
 
     def __init__(self, alert, compact=False, fade=0.0, parent=None):
         """compact=True: mô tả rút về một dòng. fade: 0 = rõ, 1 = sắp biến mất.
@@ -305,10 +313,13 @@ class AlertRow(QFrame):
         lay.setContentsMargins(12, 9, 12, 9)
         lay.setSpacing(10)
 
-        icon = QLabel(self.ICONS[kind])
-        icon.setFixedWidth(18)
-        icon.setAlignment(Qt.AlignCenter)
-        icon.setStyleSheet(f"color: {color}; font-size: 14px; font-weight: 800;")
+        # Ô màu vẽ bằng stylesheet, KHÔNG dùng ký tự: image Yocto không cài
+        # font nào có bộ Dingbats, nên ✓ ✕ hiện ra thành ô vuông rỗng trên
+        # máy thật. Màu đã đủ phân biệt mức nghiêm trọng.
+        icon = QLabel()
+        icon.setFixedSize(10, 10)
+        icon.setStyleSheet(
+            f"background-color: {color}; border-radius: 5px;")
 
         mid = QVBoxLayout()
         mid.setSpacing(1)
@@ -355,7 +366,8 @@ class NavBar(QFrame):
         self.buttons = []
         self._badges = {}
         for i, (glyph, label) in enumerate(items):
-            btn = QPushButton(f"{glyph}\n{label}")
+            # Bỏ glyph: font trên image thiếu ký tự, chúng hiện ra ô vuông.
+            btn = QPushButton(label)
             btn.setObjectName("NavBtn")
             btn.setCheckable(True)
             btn.setChecked(i == 0)
@@ -371,9 +383,8 @@ class NavBar(QFrame):
     def set_badge(self, idx, count):
         """Đánh dấu tab có việc chưa xử lý bằng dấu chấm trong nhãn."""
         btn = self.buttons[idx]
-        base = btn.text().split("\n")
-        label = base[1].split("  •")[0]
-        btn.setText(f"{base[0]}\n{label}" + ("  •" if count else ""))
+        label = btn.text().split("  •")[0]
+        btn.setText(label + ("  •" if count else ""))
 
 
 def _blend(color, background, ratio):

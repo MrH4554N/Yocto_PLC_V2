@@ -94,6 +94,15 @@ RDEPENDS:${PN} += " \
     python3-onnxruntime \
 "
 
+# Font: image không cài gói font nào, Qt chỉ có font đi kèm theo qtbase nên
+# thiếu nhiều ký tự (dấu ✔, mũi tên…) và không có monospace — chữ số trên thẻ
+# đo vì thế nhảy chiều rộng mỗi lần đổi giá trị. Giao diện đã bỏ hết ký tự lạ
+# để chạy được với font bất kỳ, nhưng có DejaVu thì mới đúng thiết kế.
+RDEPENDS:${PN} += " \
+    ttf-dejavu-sans \
+    ttf-dejavu-sans-mono \
+"
+
 # Thư viện cho phần MPC (đề xuất setpoint). Cả hai đều là wheel aarch64 dựng
 # sẵn trong meta-plc/recipes-python/. Nếu vì lý do gì đó bỏ 2 gói này ra khỏi
 # image, app vẫn chạy: services/ihcs_bridge.py tự hạ cấp xuống chế độ chỉ phát

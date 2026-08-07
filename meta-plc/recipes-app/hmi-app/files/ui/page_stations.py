@@ -45,7 +45,7 @@ class StationCard(QFrame):
         num.setStyleSheet(
             f"font-family: {MONO}; font-size: 40px; font-weight: 800; "
             f"color: {C['volt'] if selected else C['dim']};")
-        state = QLabel("● ĐANG GIÁM SÁT" if selected else "○ CHỜ")
+        state = QLabel("ĐANG GIÁM SÁT" if selected else "CHỜ")
         state.setStyleSheet(
             f"font-size: 11px; font-weight: 800; letter-spacing: 1px;"
             f"color: {(C['ok'] if link_ok else C['err']) if selected else C['dim']};")

@@ -61,7 +61,7 @@ class AlertsPage(QWidget):
         lay.addWidget(self.lbl_detail)
 
         row = QHBoxLayout(); row.setSpacing(10)
-        self.btn_apply = QPushButton("✔  ÁP DỤNG ĐỀ XUẤT")
+        self.btn_apply = QPushButton("ÁP DỤNG ĐỀ XUẤT")
         self.btn_apply.setObjectName("Success")
         self.btn_apply.setEnabled(False)
         self.btn_apply.clicked.connect(self._emit_apply)

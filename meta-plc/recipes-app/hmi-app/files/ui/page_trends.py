@@ -32,11 +32,14 @@ MAX_WINDOW_S = max(w for _, w in WINDOWS)
 
 
 class TrendsPage(QWidget):
+    # (khoá, tên, đơn vị, màu, định dạng, biên độ tối thiểu của trục Y)
+    # Biên độ tối thiểu để lúc máy nằm im, trục không co xuống bằng dải nhiễu
+    # và phóng một dao động 0,05 V thành đồ thị răng cưa dựng đứng.
     CHANNELS = [
-        ("speed",   "Tốc độ",    "rpm", C["speed"], "{:.0f}"),
-        ("voltage", "Điện áp",   "V",   C["volt"],  "{:.1f}"),
-        ("current", "Dòng điện", "A",   C["curr"],  "{:.3f}"),
-        ("power",   "Công suất", "W",   C["power"], "{:.2f}"),
+        ("speed",   "Tốc độ",    "rpm", C["speed"], "{:.0f}", 50.0),
+        ("voltage", "Điện áp",   "V",   C["volt"],  "{:.1f}", 2.0),
+        ("current", "Dòng điện", "A",   C["curr"],  "{:.3f}", 0.02),
+        ("power",   "Công suất", "W",   C["power"], "{:.2f}", 0.5),
     ]
 
     def __init__(self, parent=None):
@@ -51,8 +54,8 @@ class TrendsPage(QWidget):
         grid = QGridLayout()
         grid.setSpacing(10)
         self.plots, self.curves, self.readouts = {}, {}, {}
-        for i, (key, name, unit, color, fmt) in enumerate(self.CHANNELS):
-            grid.addWidget(self._build_channel(key, name, unit, color, fmt),
+        for i, (key, name, unit, color, fmt, span) in enumerate(self.CHANNELS):
+            grid.addWidget(self._build_channel(key, name, unit, color, fmt, span),
                            i // 2, i % 2)
         root.addLayout(grid, stretch=1)
 
@@ -87,7 +90,7 @@ class TrendsPage(QWidget):
         bar.addWidget(self.lbl_span)
         return bar
 
-    def _build_channel(self, key, name, unit, color, fmt):
+    def _build_channel(self, key, name, unit, color, fmt, min_span=0.0):
         card = QFrame(); card.setObjectName("Card")
         lay = QVBoxLayout(card)
         lay.setContentsMargins(12, 10, 12, 10)
@@ -116,7 +119,7 @@ class TrendsPage(QWidget):
 
         self.plots[key] = plot
         self.curves[key] = curve
-        self.readouts[key] = (cur, stats, fmt)
+        self.readouts[key] = (cur, stats, fmt, min_span)
         return card
 
     # ------------------------------------------------------------------
@@ -162,9 +165,12 @@ class TrendsPage(QWidget):
             plot.setXRange(-self.window_s, 0, padding=0)
             if ys:
                 lo, hi = min(ys), max(ys)
-                pad = (hi - lo) * 0.05 or (abs(hi) * 0.02 or 1.0)
-                plot.setYRange(lo - pad, hi + pad, padding=0)
-                cur, stats, fmt = self.readouts[key]
+                cur, stats, fmt, min_span = self.readouts[key]
+                span = max(hi - lo, min_span)
+                mid = (hi + lo) / 2.0
+                lo_ax, hi_ax = mid - span / 2.0, mid + span / 2.0
+                pad = span * 0.05
+                plot.setYRange(lo_ax - pad, hi_ax + pad, padding=0)
                 cur.setText(fmt.format(ys[-1]))
                 stats.setText(f"min {fmt.format(lo)} · max {fmt.format(hi)} · "
                               f"TB {fmt.format(sum(ys) / len(ys))}")

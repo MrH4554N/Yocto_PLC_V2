@@ -32,10 +32,18 @@ class MonitorPage(QWidget):
         # ---------------- hàng thẻ số ----------------
         cards = QHBoxLayout()
         cards.setSpacing(12)
-        self.card_speed = MetricCard("Tốc độ", "rpm", C["speed"], "{:.0f}")
-        self.card_volt  = MetricCard("Điện áp", "V",  C["volt"],  "{:.1f}")
-        self.card_curr  = MetricCard("Dòng điện", "A", C["curr"], "{:.3f}")
-        self.card_power = MetricCard("Công suất", "W", C["power"], "{:.2f}")
+        # min_span: biên độ tối thiểu của trục đứng trên sparkline. Máy đứng
+        # yên thì điện áp chỉ dao động 0,0-0,1 V; không có ngưỡng này thì trục
+        # co lại đúng bằng dải nhiễu và vẽ ra một hàng răng cưa dựng đứng,
+        # nhìn như máy đang giật trong khi nó đang nằm im.
+        self.card_speed = MetricCard("Tốc độ", "rpm", C["speed"], "{:.0f}",
+                                     min_span=50)          # 50 rpm
+        self.card_volt  = MetricCard("Điện áp", "V",  C["volt"],  "{:.1f}",
+                                     min_span=2.0)         # 2 V
+        self.card_curr  = MetricCard("Dòng điện", "A", C["curr"], "{:.3f}",
+                                     min_span=0.02)        # 20 mA
+        self.card_power = MetricCard("Công suất", "W", C["power"], "{:.2f}",
+                                     min_span=0.5)         # 0,5 W
         for c in (self.card_speed, self.card_volt, self.card_curr, self.card_power):
             c.setMinimumHeight(168)
             cards.addWidget(c)
