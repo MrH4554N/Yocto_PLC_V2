@@ -27,13 +27,13 @@ from ui.theme import C, MONO
 class Sparkline(QWidget):
     """Đường xu hướng nhỏ, không trục, có nền chuyển sắc dưới đường.
 
-    Giữ dữ liệu theo THỜI GIAN (mặc định 120 giây gần nhất) chứ không theo số
-    mẫu. Đây chính là chỗ đồ thị cũ sai: nó nhồi mọi mẫu từ lúc khởi động vào
-    một khung cố định, nên càng chạy lâu đường càng bị nén cho tới khi thành
-    một vệt răng cưa vô nghĩa.
+    Giữ dữ liệu theo THỜI GIAN (mặc định 60 giây gần nhất) chứ không theo số
+    mẫu, và trục thời gian CỐ ĐỊNH: mép phải là hiện tại, mép trái là 60 giây
+    trước. Vệt vì thế trôi từ phải sang trái với tốc độ đều — như máy đo nhịp
+    tim — thay vì bị căng ra rồi bóp lại theo lượng dữ liệu đang có.
     """
 
-    def __init__(self, color, window_s=120.0, min_span=0.0, parent=None):
+    def __init__(self, color, window_s=60.0, min_span=0.0, parent=None):
         super().__init__(parent)
         self.color = QColor(color)
         self.window_s = float(window_s)
@@ -66,8 +66,17 @@ class Sparkline(QWidget):
 
         ts = [p[0] for p in self._pts]
         vs = [p[1] for p in self._pts]
-        t0, t1 = ts[0], ts[-1]
-        tspan = max(t1 - t0, 1e-6)
+
+        # Trục thời gian CỐ ĐỊNH: mép phải luôn là hiện tại, mép trái luôn là
+        # window_s giây trước. Một giây luôn chiếm đúng bấy nhiêu pixel, nên
+        # vệt trôi từ phải sang trái với tốc độ đều — như máy đo nhịp tim.
+        #
+        # Bản cũ căng dữ liệu cho vừa khung (chia cho khoảng thời gian của
+        # chính đám dữ liệu đang có): lúc mới chạy vài mẫu thì sóng bè ra, dữ
+        # liệu đầy dần thì bóp lại. Cùng một nhịp đập mà lúc rộng lúc hẹp thì
+        # mắt không so sánh được gì.
+        t_now = ts[-1]
+        t_start = t_now - self.window_s
 
         vmin, vmax = min(vs), max(vs)
         vspan = max(vmax - vmin, self.min_span, 1e-9)
@@ -75,7 +84,7 @@ class Sparkline(QWidget):
         vmin, vmax = mid - vspan / 2.0, mid + vspan / 2.0
 
         def xy(t, v):
-            x = (t - t0) / tspan * (w - 2 * pad) + pad
+            x = (t - t_start) / self.window_s * (w - 2 * pad) + pad
             y = h - pad - (v - vmin) / vspan * (h - 2 * pad)
             return QPointF(x, y)
 
@@ -84,9 +93,12 @@ class Sparkline(QWidget):
         for t, v in zip(ts[1:], vs[1:]):
             path.lineTo(xy(t, v))
 
+        # Vùng tô đóng lại ở đúng mép trái của vệt, không phải mép trái khung:
+        # chưa đủ dữ liệu thì phần bên trái để trống, không tô lan ra.
+        x_left = xy(ts[0], vs[0]).x()
         fill = QPainterPath(path)
-        fill.lineTo(QPointF(w - pad, h))
-        fill.lineTo(QPointF(pad, h))
+        fill.lineTo(QPointF(xy(ts[-1], vs[-1]).x(), h))
+        fill.lineTo(QPointF(x_left, h))
         fill.closeSubpath()
 
         grad = QLinearGradient(0, 0, 0, h)
