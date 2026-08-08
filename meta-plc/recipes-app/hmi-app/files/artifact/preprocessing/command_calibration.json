@@ -1,73 +1,227 @@
 {
-  "_source": "do tu ai_training_data4.csv (27688 mau @1Hz)",
-  "_note": "D8116 dieu khien DIEN AP, bao hoa o rail 24.8V - khong dung cong thuc bac nhat",
-  "rpm_per_volt": 39.2742,
-  "saturation_knee_register": 3314,
+  "_source": "do tu ai_training_data6.csv + ai_training_data7.csv (16854 mau @1Hz, 4.79 gio)",
+  "_note": "D8116 dieu khien DIEN AP. Tren bo du lieu nay quan he gan TUYEN TINH tren toan dai lenh 2780-3200 va KHONG cham rail - khac han data4 (bao hoa tu register 3314). Ngoai dai 2780-3200 bang tra bi KEP (clamp), khong ngoai suy - phai do lai truoc khi dung cho mot dai lenh rong hon.",
+  "rpm_per_volt": 38.5311,
+  "saturation_knee_register": null,
+  "register_range": [
+    2780,
+    3200
+  ],
   "anchors": [
     {
-      "register": 2906,
-      "speed_rpm": 191.0,
-      "voltage_v": 5.233
+      "register": 2785,
+      "speed_rpm": 130.0,
+      "voltage_v": 3.79
     },
     {
-      "register": 2926,
-      "speed_rpm": 296.7,
-      "voltage_v": 7.883
+      "register": 2795,
+      "speed_rpm": 130.0,
+      "voltage_v": 3.79
     },
     {
-      "register": 3000,
-      "speed_rpm": 327.5,
-      "voltage_v": 8.648
+      "register": 2805,
+      "speed_rpm": 149.0,
+      "voltage_v": 3.834
     },
     {
-      "register": 3102,
-      "speed_rpm": 536.6,
-      "voltage_v": 13.892
+      "register": 2815,
+      "speed_rpm": 155.0,
+      "voltage_v": 4.06
     },
     {
-      "register": 3204,
-      "speed_rpm": 809.0,
-      "voltage_v": 20.63
+      "register": 2825,
+      "speed_rpm": 165.0,
+      "voltage_v": 4.526
     },
     {
-      "register": 3314,
-      "speed_rpm": 979.2,
-      "voltage_v": 24.687
+      "register": 2835,
+      "speed_rpm": 178.0,
+      "voltage_v": 4.97
     },
     {
-      "register": 3400,
-      "speed_rpm": 982.7,
-      "voltage_v": 24.762
+      "register": 2845,
+      "speed_rpm": 198.5,
+      "voltage_v": 5.402
     },
     {
-      "register": 3506,
-      "speed_rpm": 981.3,
-      "voltage_v": 24.364
+      "register": 2855,
+      "speed_rpm": 221.0,
+      "voltage_v": 5.866
     },
     {
-      "register": 3510,
-      "speed_rpm": 984.2,
-      "voltage_v": 24.787
+      "register": 2865,
+      "speed_rpm": 234.0,
+      "voltage_v": 6.216
     },
     {
-      "register": 3604,
-      "speed_rpm": 985.1,
-      "voltage_v": 24.798
+      "register": 2875,
+      "speed_rpm": 256.0,
+      "voltage_v": 6.962
     },
     {
-      "register": 3694,
-      "speed_rpm": 982.1,
-      "voltage_v": 24.791
+      "register": 2885,
+      "speed_rpm": 278.0,
+      "voltage_v": 7.547
     },
     {
-      "register": 3711,
-      "speed_rpm": 988.6,
-      "voltage_v": 24.8
+      "register": 2895,
+      "speed_rpm": 278.0,
+      "voltage_v": 7.547
     },
     {
-      "register": 3854,
-      "speed_rpm": 971.1,
-      "voltage_v": 24.785
+      "register": 2905,
+      "speed_rpm": 301.0,
+      "voltage_v": 7.838
+    },
+    {
+      "register": 2915,
+      "speed_rpm": 321.0,
+      "voltage_v": 8.288
+    },
+    {
+      "register": 2925,
+      "speed_rpm": 332.0,
+      "voltage_v": 8.828
+    },
+    {
+      "register": 2935,
+      "speed_rpm": 360.0,
+      "voltage_v": 9.386
+    },
+    {
+      "register": 2945,
+      "speed_rpm": 370.0,
+      "voltage_v": 9.628
+    },
+    {
+      "register": 2955,
+      "speed_rpm": 381.0,
+      "voltage_v": 10.168
+    },
+    {
+      "register": 2965,
+      "speed_rpm": 418.0,
+      "voltage_v": 10.65
+    },
+    {
+      "register": 2975,
+      "speed_rpm": 423.0,
+      "voltage_v": 10.898
+    },
+    {
+      "register": 2985,
+      "speed_rpm": 437.0,
+      "voltage_v": 11.536
+    },
+    {
+      "register": 2995,
+      "speed_rpm": 461.0,
+      "voltage_v": 11.776
+    },
+    {
+      "register": 3005,
+      "speed_rpm": 484.0,
+      "voltage_v": 12.596
+    },
+    {
+      "register": 3015,
+      "speed_rpm": 501.0,
+      "voltage_v": 12.826
+    },
+    {
+      "register": 3025,
+      "speed_rpm": 532.0,
+      "voltage_v": 13.5
+    },
+    {
+      "register": 3035,
+      "speed_rpm": 547.0,
+      "voltage_v": 13.94
+    },
+    {
+      "register": 3045,
+      "speed_rpm": 571.0,
+      "voltage_v": 14.976
+    },
+    {
+      "register": 3055,
+      "speed_rpm": 601.0,
+      "voltage_v": 15.258
+    },
+    {
+      "register": 3065,
+      "speed_rpm": 618.0,
+      "voltage_v": 15.9
+    },
+    {
+      "register": 3075,
+      "speed_rpm": 648.0,
+      "voltage_v": 16.348
+    },
+    {
+      "register": 3085,
+      "speed_rpm": 693.0,
+      "voltage_v": 17.494
+    },
+    {
+      "register": 3095,
+      "speed_rpm": 733.0,
+      "voltage_v": 18.236
+    },
+    {
+      "register": 3105,
+      "speed_rpm": 757.0,
+      "voltage_v": 19.02
+    },
+    {
+      "register": 3115,
+      "speed_rpm": 812.0,
+      "voltage_v": 19.918
+    },
+    {
+      "register": 3125,
+      "speed_rpm": 832.5,
+      "voltage_v": 20.796
+    },
+    {
+      "register": 3135,
+      "speed_rpm": 840.0,
+      "voltage_v": 20.8
+    },
+    {
+      "register": 3145,
+      "speed_rpm": 868.0,
+      "voltage_v": 21.666
+    },
+    {
+      "register": 3155,
+      "speed_rpm": 883.0,
+      "voltage_v": 22.317
+    },
+    {
+      "register": 3165,
+      "speed_rpm": 897.5,
+      "voltage_v": 22.317
+    },
+    {
+      "register": 3175,
+      "speed_rpm": 917.0,
+      "voltage_v": 23.18
+    },
+    {
+      "register": 3185,
+      "speed_rpm": 939.0,
+      "voltage_v": 23.642
+    },
+    {
+      "register": 3195,
+      "speed_rpm": 955.0,
+      "voltage_v": 23.939
+    },
+    {
+      "register": 3205,
+      "speed_rpm": 964.0,
+      "voltage_v": 23.939
     }
   ]
 }

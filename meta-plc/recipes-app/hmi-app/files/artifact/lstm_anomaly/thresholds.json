@@ -1,10 +1,10 @@
 {
-  "created_at_utc": "2026-08-04T16:55:42.288790+00:00",
+  "created_at_utc": "2026-08-08T06:17:54.873086+00:00",
   "method": "reconstruction_mse_percentile",
-  "warning_threshold": 0.5168394446372986,
-  "critical_threshold": 0.9235471487045288,
-  "val_mean_mse": 0.3474509119987488,
-  "val_n_samples": 4107,
+  "warning_threshold": 0.9915335178375244,
+  "critical_threshold": 1.4041661024093628,
+  "val_mean_mse": 0.34071084856987,
+  "val_n_samples": 2046,
   "warning_percentile": 95,
   "critical_percentile": 99
 }
